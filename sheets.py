@@ -20,19 +20,22 @@ SCOPES = [
 def connect_to_sheet():
     """
     بتوصل بـ Google Sheets وترجع الورقة جاهزة للاستخدام
+    بتقرأ الـ credentials من متغير البيئة أو من ملف
     """
-    # بنثبت هويتنا باستخدام ملف الـ credentials
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
-    
-    # بنعمل اتصال بـ Google
+    import os, json, tempfile
+
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if creds_json:
+        # Railway: بنقرأ الـ credentials من متغير البيئة
+        creds_dict = json.loads(creds_json)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    else:
+        # محلي: بنقرأ من الملف
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+
     client = gspread.authorize(creds)
-    
-    # بنفتح الملف بالـ ID بتاعه
     spreadsheet = client.open_by_key(SHEET_ID)
-    
-    # بنفتح الورقة المطلوبة
     sheet = spreadsheet.worksheet(SHEET_NAME)
-    
     return sheet
 
 
