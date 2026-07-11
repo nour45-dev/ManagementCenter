@@ -1,0 +1,13 @@
+# أسرار وبيانات حساسة - لا ترفعيهم أبداً
+credentials.json
+config_secret.py
+
+# ملفات Python المترجمة
+__pycache__/
+*.pyc
+*.pyo
+
+# ملفات النظام
+.env
+.DS_Store
+Thumbs.db
