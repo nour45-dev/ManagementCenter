@@ -277,3 +277,62 @@ def get_statistics_updated() -> dict:
     except Exception as e:
         print(f"❌ خطأ في الإحصائيات: {e}")
         return {}
+
+
+def get_teacher_stats(teacher_name: str = None) -> dict | list:
+    """
+    لو بعتلها اسم مدرس: بترجع كام طالب معاه وتفاصيلهم
+    لو مبعتلهاش اسم: بترجع كل المدرسين وعدد طلاب كل واحد
+    """
+    try:
+        sheet = connect_to_sheet()
+        all_data = sheet.get_all_records()
+
+        # dict فيه كل مدرس وطلابه
+        teachers = {}
+
+        for student in all_data:
+            teachers_str = str(student.get("المدرسين", ""))
+            if not teachers_str.strip():
+                continue
+
+            # المدرسين بتاعت الطالب مكتوبة زي:
+            # "عربي: مستر أحمد، رياضة: مستر محمد"
+            for pair in teachers_str.split("،"):
+                pair = pair.strip()
+                if ":" in pair:
+                    parts = pair.split(":", 1)
+                    teacher = parts[1].strip()
+                else:
+                    teacher = pair.strip()
+
+                if not teacher:
+                    continue
+
+                if teacher not in teachers:
+                    teachers[teacher] = []
+                teachers[teacher].append({
+                    "اسم": student.get("الاسم", ""),
+                    "كود": student.get("الكود", ""),
+                    "السنة": student.get("السنة الدراسية", ""),
+                    "المادة": parts[0].strip() if ":" in pair else ""
+                })
+
+        if teacher_name:
+            # بحث جزئي - مش لازم الاسم كامل
+            teacher_name_lower = teacher_name.strip().lower()
+            results = {}
+            for t, students in teachers.items():
+                if teacher_name_lower in t.lower():
+                    results[t] = students
+            return results
+
+        # كل المدرسين مرتبين من الأكتر للأقل
+        sorted_teachers = dict(
+            sorted(teachers.items(), key=lambda x: len(x[1]), reverse=True)
+        )
+        return sorted_teachers
+
+    except Exception as e:
+        print(f"❌ خطأ في إحصائيات المدرسين: {e}")
+        return {}
