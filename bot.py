@@ -11,7 +11,7 @@ from config import BOT_TOKEN, ADMIN_ID, SUBJECTS
 from sheets import (
     setup_sheet, add_student, search_by_code, search_by_name,
     get_students_by_year, update_student, delete_student,
-    get_statistics_updated, get_last_code_per_year
+    get_statistics_updated, get_last_code_per_year, get_teacher_stats
 )
 from keyboards import (
     main_menu_keyboard, year_keyboard, subjects_keyboard,
@@ -45,11 +45,13 @@ SEARCH_CODE        = "SEARCH_CODE"
 SEARCH_NAME        = "SEARCH_NAME"
 SMART_EDIT         = "SMART_EDIT"          # تعديل بضغطة زر
 EDIT_FIELD_VALUE   = "EDIT_FIELD_VALUE"
+EDIT_ONE_FIELD     = "EDIT_ONE_FIELD"      # تعديل حقل واحد من شاشة التعديل الذكي
 EDIT_ALL_VALUE     = "EDIT_ALL_VALUE"
 IMG_EDIT_FIELD     = "IMG_EDIT_FIELD"
 DELETE_CODE        = "DELETE_CODE"
 BULK_INPUT         = "BULK_INPUT"
 MULTI_PHOTO        = "MULTI_PHOTO"
+SEARCH_TEACHER     = "SEARCH_TEACHER"      # البحث عن مدرس بالاسم
 
 temp_data  = {}
 user_state = {}
@@ -624,6 +626,55 @@ async def handle_callback(update: Update, context) -> None:
         except Exception as e:
             await query.edit_message_text("❌ حصل خطأ", reply_markup=back_keyboard())
 
+    # ====== إحصائيات المدرسين - عرض كل المدرسين ======
+    elif data == "teacher_stats":
+        await query.edit_message_text(
+            "👨‍🏫 إحصائيات المدرسين\n\n"
+            "إيه اللي عايزاه؟",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 كل المدرسين وعدد طلابهم", callback_data="all_teachers")],
+                [InlineKeyboardButton("🔍 بحث عن مدرس معين", callback_data="search_teacher")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
+            ])
+        )
+
+    # ====== كل المدرسين ======
+    elif data == "all_teachers":
+        await query.edit_message_text("⏳ جاري جلب البيانات...")
+        teachers = get_teacher_stats()
+        if not teachers:
+            await query.edit_message_text(
+                "📭 مفيش بيانات مدرسين مسجلة",
+                reply_markup=back_keyboard()
+            )
+            return
+
+        text = "👨‍🏫 كل المدرسين وعدد طلابهم:\n━━━━━━━━━━━━━━━━\n"
+        for i, (teacher, students) in enumerate(teachers.items(), 1):
+            text += f"{i}. {teacher}: {len(students)} طالب\n"
+
+        # لو الرسالة طويلة نقسمها
+        if len(text) > 4000:
+            chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            await query.edit_message_text(chunks[0])
+            for chunk in chunks[1:]:
+                await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ انتهى",
+                reply_markup=back_keyboard()
+            )
+        else:
+            await query.edit_message_text(text, reply_markup=back_keyboard())
+
+    # ====== بحث عن مدرس معين ======
+    elif data == "search_teacher":
+        user_state[uid] = SEARCH_TEACHER
+        await query.edit_message_text(
+            "🔍 بحث عن مدرس\n\n✍️ اكتبي اسم المدرس أو جزء منه:",
+            reply_markup=back_keyboard()
+        )
+
     # ====== تعديل كل البيانات بعرض الحالية والضغط ======
     elif data.startswith("editall_"):
         code = data.replace("editall_", "")
@@ -1167,6 +1218,56 @@ async def handle_text(update: Update, context) -> None:
             await update.message.reply_text(
                 f"🔍 لقيت {len(results)} طالب بالاسم '{text}'\nاختاري:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+    # ====== بحث عن مدرس ======
+    elif state == SEARCH_TEACHER:
+        user_state.pop(uid, None)
+        wait_msg = await update.message.reply_text("⏳ جاري البحث...")
+        results = get_teacher_stats(text)
+
+        if not results:
+            await wait_msg.edit_text(
+                f"❌ مفيش مدرس بالاسم '{text}'",
+                reply_markup=back_keyboard()
+            )
+            return
+
+        # بنبني الرد لكل مدرس في النتيجة
+        response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
+        for teacher, students in results.items():
+            response += f"\n👨‍🏫 {teacher}\n"
+            response += f"📊 عدد الطلاب: {len(students)}\n"
+
+            # تفاصيل الطلاب
+            for i, s in enumerate(students, 1):
+                response += (
+                    f"  {i}. {s.get('اسم', '')} "
+                    f"({s.get('السنة', '')}) "
+                    f"- {s.get('المادة', '')}\n"
+                )
+            response += "━━━━━━━━━━━━━━━━\n"
+
+        if len(response) > 4000:
+            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            await wait_msg.edit_text(chunks[0])
+            for chunk in chunks[1:]:
+                await context.bot.send_message(chat_id=update.message.chat_id, text=chunk)
+            await context.bot.send_message(
+                chat_id=update.message.chat_id,
+                text="✅ انتهى",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+                ])
+            )
+        else:
+            await wait_msg.edit_text(
+                response,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+                ])
             )
 
     # ====== تسجيل مجموعة ======
