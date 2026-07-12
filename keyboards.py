@@ -3,7 +3,25 @@
 # ====================================================
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from config import SUBJECTS
+from config import SUBJECTS, TEACHERS
+
+
+def teachers_keyboard(subject: str) -> InlineKeyboardMarkup:
+    """
+    بتعرض أزرار المدرسين المتاحين لمادة معينة
+    مع زرار 'تخطي' لو مش عايز يختار
+    """
+    teachers_list = TEACHERS.get(subject, [])
+    keyboard = []
+    for teacher in teachers_list:
+        keyboard.append([InlineKeyboardButton(
+            f"👨‍🏫 {teacher}", callback_data=f"pick_teacher_{subject}_{teacher}"
+        )])
+    keyboard.append([InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")])
+    keyboard.append([InlineKeyboardButton("✍️ اكتب اسم تاني", callback_data=f"write_teacher_{subject}")])
+    return InlineKeyboardMarkup(keyboard)
+
+
 
 
 def main_menu_keyboard():
@@ -16,7 +34,9 @@ def main_menu_keyboard():
         [InlineKeyboardButton("✏️ تعديل بيانات", callback_data="edit_student")],
         [InlineKeyboardButton("🗑️ حذف طالب", callback_data="delete_student")],
         [InlineKeyboardButton("📊 تقارير", callback_data="reports")],
-        [InlineKeyboardButton("📈 إحصائيات", callback_data="stats"), InlineKeyboardButton("🔢 آخر الأكواد", callback_data="last_codes")],
+        [InlineKeyboardButton("📈 إحصائيات", callback_data="stats"),
+         InlineKeyboardButton("🔢 آخر الأكواد", callback_data="last_codes")],
+        [InlineKeyboardButton("👨‍🏫 إحصائيات المدرسين", callback_data="teacher_stats")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
