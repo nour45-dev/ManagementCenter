@@ -856,19 +856,11 @@ async def handle_callback(update: Update, context) -> None:
 
         # بنحفظ المواد ونبدأ طلب المدرسين
         uid_data["المواد"] = ", ".join(selected)
-        uid_data["pending_teachers"] = list(selected)  # قائمة المواد اللي لسه محتاجة مدرس
+        uid_data["pending_teachers"] = list(selected)
         uid_data["teachers_dict"] = uid_data.get("teachers_dict", {})
 
-        # نطلب مدرس أول مادة
-        next_subject = uid_data["pending_teachers"][0]
-        user_state[uid] = GET_TEACHER
-        await query.edit_message_text(
-            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
-            f"(أو اضغطي تخطي لو مش عايزاه)",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
-            ])
-        )
+        # نطلب مدرس أول مادة عن طريق الدالة المركزية (بتعرض الأزرار)
+        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
 
     # ====== تخطي مدرس مادة ======
     elif data.startswith("skip_teacher_"):
