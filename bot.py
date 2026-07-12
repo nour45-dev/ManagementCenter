@@ -7,7 +7,7 @@ import json
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from config import BOT_TOKEN, ADMIN_ID, SUBJECTS
+from config import BOT_TOKEN, ADMIN_ID, SUBJECTS, TEACHERS
 from sheets import (
     setup_sheet, add_student, search_by_code, search_by_name,
     get_students_by_year, update_student, delete_student,
@@ -19,7 +19,7 @@ from keyboards import (
     student_actions_keyboard, smart_edit_keyboard,
     edit_fields_keyboard, image_actions_keyboard,
     report_type_keyboard, report_content_keyboard,
-    confirm_delete_keyboard, back_keyboard
+    confirm_delete_keyboard, back_keyboard, teachers_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
@@ -879,6 +879,37 @@ async def handle_callback(update: Update, context) -> None:
 
         await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
 
+    # ====== اختيار مدرس من الأزرار ======
+    elif data.startswith("pick_teacher_"):
+        # pick_teacher_{subject}_{teacher_name}
+        rest = data.replace("pick_teacher_", "", 1)
+        uid_data = temp_data.get(uid, {})
+        pending = uid_data.get("pending_teachers", [])
+
+        # نعرف المادة من أول عنصر في pending (لأن اسم المدرس ممكن يحتوي _)
+        subject = pending[0] if pending else ""
+        teacher = rest[len(subject)+1:]  # نشيل subject_ من الأول
+
+        if subject:
+            uid_data.setdefault("teachers_dict", {})[subject] = teacher
+            if subject in pending:
+                pending.remove(subject)
+
+        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
+
+    # ====== كتابة اسم مدرس يدوياً ======
+    elif data.startswith("write_teacher_"):
+        subject = data.replace("write_teacher_", "", 1)
+        uid_data = temp_data.get(uid, {})
+        user_state[uid] = GET_TEACHER
+        context.user_data["writing_teacher_for"] = subject
+        await query.edit_message_text(
+            f"✍️ اكتبي اسم مدرس مادة:\n📖 {subject}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")
+            ]])
+        )
+
     # ====== spec_ و bacc_ ======
     elif data.startswith("spec_") or data.startswith("editspec_"):
         is_edit = data.startswith("editspec_")
@@ -1034,17 +1065,13 @@ async def _process_next_teacher(update, context, uid, uid_data, from_callback=Fa
         # لسه في مواد
         next_subject = pending[0]
         user_state[uid] = GET_TEACHER
-        text = (
-            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
-            f"(أو اضغطي تخطي)"
-        )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
-        ])
+        has_teachers = bool(TEACHERS.get(next_subject))
+        text = f"👨‍🏫 اختاري مدرس مادة:\n📖 {next_subject}"
+        kb = teachers_keyboard(next_subject)
         if from_callback:
-            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+            await update.callback_query.edit_message_text(text, reply_markup=kb)
         else:
-            await update.message.reply_text(text, reply_markup=keyboard)
+            await update.message.reply_text(text, reply_markup=kb)
     else:
         # خلصنا كل المواد - نحفظ الطالب
         user_state.pop(uid, None)
@@ -1173,10 +1200,21 @@ async def handle_text(update: Update, context) -> None:
     elif state == GET_TEACHER:
         uid_data = temp_data.get(uid, {})
         pending = uid_data.get("pending_teachers", [])
-        if pending:
+
+        # لو كان بيكتب مدرس لمادة محددة من write_teacher_
+        writing_for = context.user_data.pop("writing_teacher_for", None)
+        if writing_for:
+            current_subject = writing_for
+        elif pending:
             current_subject = pending[0]
-            uid_data["teachers_dict"][current_subject] = text
-            uid_data["pending_teachers"].pop(0)
+        else:
+            current_subject = None
+
+        if current_subject:
+            uid_data.setdefault("teachers_dict", {})[current_subject] = text
+            if current_subject in pending:
+                pending.remove(current_subject)
+
         await _process_next_teacher(update, context, uid, uid_data, from_callback=False)
 
     # ====== البحث بالكود ======
