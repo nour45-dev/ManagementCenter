@@ -600,26 +600,17 @@ async def handle_callback(update: Update, context) -> None:
     # ====== إحصائيات ======
     elif data == "stats":
         stats = get_statistics_updated()
-        msg = (
-            f"📈 إحصائيات مركز الارائج\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"👥 إجمالي الطلاب: {stats.get('الإجمالي', 0)}\n"
-            f"✅ مسجلين مع مدرسين: {stats.get('مع_مدرسين', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
+        await query.edit_message_text(
+            f"📈 إحصائيات مركز الارائج\n\n"
+            f"👥 الإجمالي: {stats.get('الإجمالي', 0)}\n"
             f"1️⃣ ث1: {stats.get('ث1', 0)}\n"
             f"2️⃣ ث2: {stats.get('ث2', 0)}\n"
-            f"3️⃣ ث3: {stats.get('ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
+            f"3️⃣ ث3: {stats.get('ث3', 0)}\n\n"
             f"🏫 عام: {stats.get('عام', 0)}\n"
-            f"  ث1: {stats.get('عام_ث1', 0)} | ث2: {stats.get('عام_ث2', 0)} | ث3: {stats.get('عام_ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
             f"🕌 أزهر: {stats.get('أزهر', 0)}\n"
-            f"  ث1: {stats.get('أزهر_ث1', 0)} | ث2: {stats.get('أزهر_ث2', 0)} | ث3: {stats.get('أزهر_ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}\n"
-            f"  ث1: {stats.get('بكالوريا_ث1', 0)} | ث2: {stats.get('بكالوريا_ث2', 0)} | ث3: {stats.get('بكالوريا_ث3', 0)}"
+            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}",
+            reply_markup=back_keyboard()
         )
-        await query.edit_message_text(msg, reply_markup=back_keyboard())
 
     # ====== آخر كود لكل سنة ======
     elif data == "last_codes":
@@ -1244,11 +1235,24 @@ async def handle_text(update: Update, context) -> None:
 
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
-        for teacher, students in results.items():
-            response += f"\n👨‍🏫 {teacher}\n"
-            response += f"📊 عدد الطلاب: {len(students)}\n"
+        for teacher, data_val in results.items():
+            # بندعم الشكلين: القديم (list) والجديد (dict مع طلاب وبالسنة)
+            if isinstance(data_val, dict) and "طلاب" in data_val:
+                students  = data_val["طلاب"]
+                breakdown = data_val.get("بالسنة", {})
+            else:
+                students  = data_val
+                breakdown = {}
 
-            # تفاصيل الطلاب
+            response += f"\n👨‍🏫 {teacher}\n"
+            response += f"📊 إجمالي الطلاب: {len(students)}\n"
+            if breakdown:
+                response += (
+                    f"  1️⃣ ث1: {breakdown.get('ث1', 0)} | "
+                    f"2️⃣ ث2: {breakdown.get('ث2', 0)} | "
+                    f"3️⃣ ث3: {breakdown.get('ث3', 0)}\n"
+                )
+            response += "📋 تفاصيل الطلاب:\n"
             for i, s in enumerate(students, 1):
                 response += (
                     f"  {i}. {s.get('اسم', '')} "
@@ -1257,27 +1261,19 @@ async def handle_text(update: Update, context) -> None:
                 )
             response += "━━━━━━━━━━━━━━━━\n"
 
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+        ])
+
         if len(response) > 4000:
             chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
             await wait_msg.edit_text(chunks[0])
             for chunk in chunks[1:]:
                 await context.bot.send_message(chat_id=update.message.chat_id, text=chunk)
-            await context.bot.send_message(
-                chat_id=update.message.chat_id,
-                text="✅ انتهى",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
-                ])
-            )
+            await context.bot.send_message(chat_id=update.message.chat_id, text="✅ انتهى", reply_markup=kb)
         else:
-            await wait_msg.edit_text(
-                response,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
-                ])
-            )
+            await wait_msg.edit_text(response, reply_markup=kb)
 
     # ====== تسجيل مجموعة ======
     elif state == BULK_INPUT:
