@@ -172,10 +172,10 @@ def format_student_info(student: dict) -> str:
 
 
 def build_teachers_text(teachers: dict) -> str:
-    """بتحول dict المدرسين لنص: عربي/الأستاذ أحمد | كيمياء/الأستاذة سارة"""
+    """بتحول dict المدرسين لنص: عربي::ا/ احمد | كيمياء::ا/ محمد"""
     if not teachers:
         return ""
-    return " | ".join([f"{subj}/{teacher}" for subj, teacher in teachers.items() if teacher])
+    return " | ".join([f"{subj}::{teacher}" for subj, teacher in teachers.items() if teacher])
 
 
 # ====================================================
@@ -600,25 +600,17 @@ async def handle_callback(update: Update, context) -> None:
     # ====== إحصائيات ======
     elif data == "stats":
         stats = get_statistics_updated()
-        msg = (
-            f"📈 إحصائيات مركز الارائج\n"
-            f"(الطلاب المسجلين مع مدرسين فقط)\n"
-            f"━━━━━━━━━━━━━━━━\n"
+        await query.edit_message_text(
+            f"📈 إحصائيات مركز الارائج\n\n"
             f"👥 الإجمالي: {stats.get('الإجمالي', 0)}\n"
             f"1️⃣ ث1: {stats.get('ث1', 0)}\n"
             f"2️⃣ ث2: {stats.get('ث2', 0)}\n"
-            f"3️⃣ ث3: {stats.get('ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
+            f"3️⃣ ث3: {stats.get('ث3', 0)}\n\n"
             f"🏫 عام: {stats.get('عام', 0)}\n"
-            f"  ث1: {stats.get('عام_ث1', 0)} | ث2: {stats.get('عام_ث2', 0)} | ث3: {stats.get('عام_ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
             f"🕌 أزهر: {stats.get('أزهر', 0)}\n"
-            f"  ث1: {stats.get('أزهر_ث1', 0)} | ث2: {stats.get('أزهر_ث2', 0)} | ث3: {stats.get('أزهر_ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}\n"
-            f"  ث1: {stats.get('بكالوريا_ث1', 0)} | ث2: {stats.get('بكالوريا_ث2', 0)} | ث3: {stats.get('بكالوريا_ث3', 0)}"
+            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}",
+            reply_markup=back_keyboard()
         )
-        await query.edit_message_text(msg, reply_markup=back_keyboard())
 
     # ====== آخر كود لكل سنة ======
     elif data == "last_codes":
@@ -1243,23 +1235,11 @@ async def handle_text(update: Update, context) -> None:
 
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
-        for teacher, data_val in results.items():
-            # الشكل الجديد: {"طلاب": [...], "بالسنة": {...}}
-            if isinstance(data_val, dict) and "طلاب" in data_val:
-                students = data_val["طلاب"]
-                breakdown = data_val.get("بالسنة", {})
-            else:
-                students = data_val
-                breakdown = {}
+        for teacher, students in results.items():
             response += f"\n👨‍🏫 {teacher}\n"
-            response += f"📊 إجمالي الطلاب: {len(students)}\n"
-            if breakdown:
-                response += (
-                    f"  1️⃣ ث1: {breakdown.get('ث1', 0)} | "
-                    f"2️⃣ ث2: {breakdown.get('ث2', 0)} | "
-                    f"3️⃣ ث3: {breakdown.get('ث3', 0)}\n"
-                )
-            response += "📋 تفاصيل الطلاب:\n"
+            response += f"📊 عدد الطلاب: {len(students)}\n"
+
+            # تفاصيل الطلاب
             for i, s in enumerate(students, 1):
                 response += (
                     f"  {i}. {s.get('اسم', '')} "
