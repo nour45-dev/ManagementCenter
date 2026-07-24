@@ -7,7 +7,7 @@ import json
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from config import BOT_TOKEN, ADMIN_ID, SUBJECTS, TEACHERS
+from config import BOT_TOKEN, ADMIN_ID, SUBJECTS
 from sheets import (
     setup_sheet, add_student, search_by_code, search_by_name,
     get_students_by_year, update_student, delete_student,
@@ -19,7 +19,7 @@ from keyboards import (
     student_actions_keyboard, smart_edit_keyboard,
     edit_fields_keyboard, image_actions_keyboard,
     report_type_keyboard, report_content_keyboard,
-    confirm_delete_keyboard, back_keyboard, teachers_keyboard
+    confirm_delete_keyboard, back_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
@@ -600,17 +600,25 @@ async def handle_callback(update: Update, context) -> None:
     # ====== إحصائيات ======
     elif data == "stats":
         stats = get_statistics_updated()
-        await query.edit_message_text(
-            f"📈 إحصائيات مركز الارائج\n\n"
+        msg = (
+            f"📈 إحصائيات مركز الارائج\n"
+            f"(الطلاب المسجلين مع مدرسين فقط)\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"👥 الإجمالي: {stats.get('الإجمالي', 0)}\n"
             f"1️⃣ ث1: {stats.get('ث1', 0)}\n"
             f"2️⃣ ث2: {stats.get('ث2', 0)}\n"
-            f"3️⃣ ث3: {stats.get('ث3', 0)}\n\n"
+            f"3️⃣ ث3: {stats.get('ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"🏫 عام: {stats.get('عام', 0)}\n"
+            f"  ث1: {stats.get('عام_ث1', 0)} | ث2: {stats.get('عام_ث2', 0)} | ث3: {stats.get('عام_ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"🕌 أزهر: {stats.get('أزهر', 0)}\n"
-            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}",
-            reply_markup=back_keyboard()
+            f"  ث1: {stats.get('أزهر_ث1', 0)} | ث2: {stats.get('أزهر_ث2', 0)} | ث3: {stats.get('أزهر_ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}\n"
+            f"  ث1: {stats.get('بكالوريا_ث1', 0)} | ث2: {stats.get('بكالوريا_ث2', 0)} | ث3: {stats.get('بكالوريا_ث3', 0)}"
         )
+        await query.edit_message_text(msg, reply_markup=back_keyboard())
 
     # ====== آخر كود لكل سنة ======
     elif data == "last_codes":
@@ -856,11 +864,19 @@ async def handle_callback(update: Update, context) -> None:
 
         # بنحفظ المواد ونبدأ طلب المدرسين
         uid_data["المواد"] = ", ".join(selected)
-        uid_data["pending_teachers"] = list(selected)
+        uid_data["pending_teachers"] = list(selected)  # قائمة المواد اللي لسه محتاجة مدرس
         uid_data["teachers_dict"] = uid_data.get("teachers_dict", {})
 
-        # نطلب مدرس أول مادة عن طريق الدالة المركزية (بتعرض الأزرار)
-        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
+        # نطلب مدرس أول مادة
+        next_subject = uid_data["pending_teachers"][0]
+        user_state[uid] = GET_TEACHER
+        await query.edit_message_text(
+            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
+            f"(أو اضغطي تخطي لو مش عايزاه)",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
+            ])
+        )
 
     # ====== تخطي مدرس مادة ======
     elif data.startswith("skip_teacher_"):
@@ -870,37 +886,6 @@ async def handle_callback(update: Update, context) -> None:
             uid_data["pending_teachers"].remove(subject)
 
         await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
-
-    # ====== اختيار مدرس من الأزرار ======
-    elif data.startswith("pick_teacher_"):
-        # pick_teacher_{subject}_{teacher_name}
-        rest = data.replace("pick_teacher_", "", 1)
-        uid_data = temp_data.get(uid, {})
-        pending = uid_data.get("pending_teachers", [])
-
-        # نعرف المادة من أول عنصر في pending (لأن اسم المدرس ممكن يحتوي _)
-        subject = pending[0] if pending else ""
-        teacher = rest[len(subject)+1:]  # نشيل subject_ من الأول
-
-        if subject:
-            uid_data.setdefault("teachers_dict", {})[subject] = teacher
-            if subject in pending:
-                pending.remove(subject)
-
-        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
-
-    # ====== كتابة اسم مدرس يدوياً ======
-    elif data.startswith("write_teacher_"):
-        subject = data.replace("write_teacher_", "", 1)
-        uid_data = temp_data.get(uid, {})
-        user_state[uid] = GET_TEACHER
-        context.user_data["writing_teacher_for"] = subject
-        await query.edit_message_text(
-            f"✍️ اكتبي اسم مدرس مادة:\n📖 {subject}",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")
-            ]])
-        )
 
     # ====== spec_ و bacc_ ======
     elif data.startswith("spec_") or data.startswith("editspec_"):
@@ -1057,13 +1042,17 @@ async def _process_next_teacher(update, context, uid, uid_data, from_callback=Fa
         # لسه في مواد
         next_subject = pending[0]
         user_state[uid] = GET_TEACHER
-        has_teachers = bool(TEACHERS.get(next_subject))
-        text = f"👨‍🏫 اختاري مدرس مادة:\n📖 {next_subject}"
-        kb = teachers_keyboard(next_subject)
+        text = (
+            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
+            f"(أو اضغطي تخطي)"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
+        ])
         if from_callback:
-            await update.callback_query.edit_message_text(text, reply_markup=kb)
+            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
         else:
-            await update.message.reply_text(text, reply_markup=kb)
+            await update.message.reply_text(text, reply_markup=keyboard)
     else:
         # خلصنا كل المواد - نحفظ الطالب
         user_state.pop(uid, None)
@@ -1192,21 +1181,10 @@ async def handle_text(update: Update, context) -> None:
     elif state == GET_TEACHER:
         uid_data = temp_data.get(uid, {})
         pending = uid_data.get("pending_teachers", [])
-
-        # لو كان بيكتب مدرس لمادة محددة من write_teacher_
-        writing_for = context.user_data.pop("writing_teacher_for", None)
-        if writing_for:
-            current_subject = writing_for
-        elif pending:
+        if pending:
             current_subject = pending[0]
-        else:
-            current_subject = None
-
-        if current_subject:
-            uid_data.setdefault("teachers_dict", {})[current_subject] = text
-            if current_subject in pending:
-                pending.remove(current_subject)
-
+            uid_data["teachers_dict"][current_subject] = text
+            uid_data["pending_teachers"].pop(0)
         await _process_next_teacher(update, context, uid, uid_data, from_callback=False)
 
     # ====== البحث بالكود ======
@@ -1265,11 +1243,17 @@ async def handle_text(update: Update, context) -> None:
 
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
-        for teacher, students in results.items():
+        for teacher, data_dict in results.items():
+            students = data_dict.get("طلاب", [])
+            breakdown = data_dict.get("بالسنة", {})
             response += f"\n👨‍🏫 {teacher}\n"
-            response += f"📊 عدد الطلاب: {len(students)}\n"
-
-            # تفاصيل الطلاب
+            response += f"📊 إجمالي الطلاب: {len(students)}\n"
+            response += (
+                f"  1️⃣ ث1: {breakdown.get('ث1', 0)} | "
+                f"2️⃣ ث2: {breakdown.get('ث2', 0)} | "
+                f"3️⃣ ث3: {breakdown.get('ث3', 0)}\n"
+            )
+            response += "📋 تفاصيل الطلاب:\n"
             for i, s in enumerate(students, 1):
                 response += (
                     f"  {i}. {s.get('اسم', '')} "
@@ -1444,7 +1428,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print("✅ البوت شغال! ابعتي /start في التليجرام")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
