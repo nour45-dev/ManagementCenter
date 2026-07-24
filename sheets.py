@@ -267,10 +267,7 @@ def get_statistics_updated() -> dict:
         all_data = sheet.get_all_records()
 
         # بنفلتر بس الطلاب اللي عندهم مدرسين مسجلين
-        active = [
-            s for s in all_data
-            if str(s.get("المدرسين", "")).strip()
-        ]
+        active = [s for s in all_data if str(s.get("المدرسين", "")).strip()]
 
         def count(lst, year=None, spec=None):
             result = lst
@@ -283,22 +280,18 @@ def get_statistics_updated() -> dict:
             return len(result)
 
         stats = {
-            # إجمالي عام
             "الإجمالي":    count(active),
             "ث1":          count(active, year="ث1"),
             "ث2":          count(active, year="ث2"),
             "ث3":          count(active, year="ث3"),
-            # عام
             "عام":         count(active, spec="عام"),
             "عام_ث1":      count(active, year="ث1", spec="عام"),
             "عام_ث2":      count(active, year="ث2", spec="عام"),
             "عام_ث3":      count(active, year="ث3", spec="عام"),
-            # أزهر
             "أزهر":        count(active, spec="أزهر"),
             "أزهر_ث1":     count(active, year="ث1", spec="أزهر"),
             "أزهر_ث2":     count(active, year="ث2", spec="أزهر"),
             "أزهر_ث3":     count(active, year="ث3", spec="أزهر"),
-            # بكالوريا
             "بكالوريا":    count(active, spec="بكالوريا"),
             "بكالوريا_ث1": count(active, year="ث1", spec="بكالوريا"),
             "بكالوريا_ث2": count(active, year="ث2", spec="بكالوريا"),
@@ -314,7 +307,7 @@ def get_statistics_updated() -> dict:
 def get_teacher_stats(teacher_name: str = None) -> dict | list:
     """
     إحصائيات المدرسين - بتحسب بس الطلاب اللي مسجلين عندهم مدرسين
-    كل مدرس فيه تفاصيل الطلاب + تكسير بالسنة (ث1/ث2/ث3)
+    كل مدرس فيه تفاصيل الطلاب + تكسير بالسنة
     """
     try:
         sheet = connect_to_sheet()
