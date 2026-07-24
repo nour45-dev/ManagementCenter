@@ -259,15 +259,11 @@ def search_by_name(name: str) -> list:
 
 def get_statistics_updated() -> dict:
     """
-    إحصائيات موسعة - بتحسب الطلاب اللي عندهم مدرسين مسجلين بس
-    وبتكسر بالتفصيل: كل تخصص × كل سنة
+    إحصائيات موسعة - بتحسب كل الطلاب وبتكسر بالتفصيل
     """
     try:
         sheet = connect_to_sheet()
         all_data = sheet.get_all_records()
-
-        # بنفلتر بس الطلاب اللي عندهم مدرسين مسجلين
-        active = [s for s in all_data if str(s.get("المدرسين", "")).strip()]
 
         def count(lst, year=None, spec=None):
             result = lst
@@ -279,23 +275,30 @@ def get_statistics_updated() -> dict:
                 result = [s for s in result if str(s.get("التخصص", "")).strip() == spec]
             return len(result)
 
+        # الطلاب اللي عندهم مدرسين مسجلين
+        with_teachers = [s for s in all_data if str(s.get("المدرسين", "")).strip()]
+
         stats = {
-            "الإجمالي":    count(active),
-            "ث1":          count(active, year="ث1"),
-            "ث2":          count(active, year="ث2"),
-            "ث3":          count(active, year="ث3"),
-            "عام":         count(active, spec="عام"),
-            "عام_ث1":      count(active, year="ث1", spec="عام"),
-            "عام_ث2":      count(active, year="ث2", spec="عام"),
-            "عام_ث3":      count(active, year="ث3", spec="عام"),
-            "أزهر":        count(active, spec="أزهر"),
-            "أزهر_ث1":     count(active, year="ث1", spec="أزهر"),
-            "أزهر_ث2":     count(active, year="ث2", spec="أزهر"),
-            "أزهر_ث3":     count(active, year="ث3", spec="أزهر"),
-            "بكالوريا":    count(active, spec="بكالوريا"),
-            "بكالوريا_ث1": count(active, year="ث1", spec="بكالوريا"),
-            "بكالوريا_ث2": count(active, year="ث2", spec="بكالوريا"),
-            "بكالوريا_ث3": count(active, year="ث3", spec="بكالوريا"),
+            # إجمالي كل الطلاب
+            "الإجمالي":    len(all_data),
+            "ث1":          count(all_data, year="ث1"),
+            "ث2":          count(all_data, year="ث2"),
+            "ث3":          count(all_data, year="ث3"),
+            # بالتخصص
+            "عام":         count(all_data, spec="عام"),
+            "عام_ث1":      count(all_data, year="ث1", spec="عام"),
+            "عام_ث2":      count(all_data, year="ث2", spec="عام"),
+            "عام_ث3":      count(all_data, year="ث3", spec="عام"),
+            "أزهر":        count(all_data, spec="أزهر"),
+            "أزهر_ث1":     count(all_data, year="ث1", spec="أزهر"),
+            "أزهر_ث2":     count(all_data, year="ث2", spec="أزهر"),
+            "أزهر_ث3":     count(all_data, year="ث3", spec="أزهر"),
+            "بكالوريا":    count(all_data, spec="بكالوريا"),
+            "بكالوريا_ث1": count(all_data, year="ث1", spec="بكالوريا"),
+            "بكالوريا_ث2": count(all_data, year="ث2", spec="بكالوريا"),
+            "بكالوريا_ث3": count(all_data, year="ث3", spec="بكالوريا"),
+            # مسجلين مع مدرسين
+            "مع_مدرسين":  len(with_teachers),
         }
         return stats
     except Exception as e:
@@ -303,11 +306,12 @@ def get_statistics_updated() -> dict:
         return {}
 
 
-
 def get_teacher_stats(teacher_name: str = None) -> dict | list:
     """
-    إحصائيات المدرسين - بتحسب بس الطلاب اللي مسجلين عندهم مدرسين
-    كل مدرس فيه تفاصيل الطلاب + تكسير بالسنة
+    إحصائيات المدرسين مع تكسير بالسنة.
+    بيدعم الفورمات: "عربي مستر احمد , كيمياء مستر محمد"
+                  و "عربي::ا/ احمد | كيمياء::ا/ محمد"
+                  و "عربي/ا/ احمد | كيمياء/ا/ محمد"
     """
     try:
         sheet = connect_to_sheet()
@@ -320,30 +324,35 @@ def get_teacher_stats(teacher_name: str = None) -> dict | list:
             if not teachers_str:
                 continue
 
-            separators = ["|", "،", ","]
-            pairs = [teachers_str]
-            for sep in separators:
-                new_pairs = []
-                for chunk in pairs:
-                    new_pairs.extend(chunk.split(sep))
-                pairs = new_pairs
+            # نفصل المدرسين - بندعم | و , و ،
+            entries = []
+            for sep in [" | ", "|", " , ", ","]:
+                if sep in teachers_str:
+                    entries = [e.strip() for e in teachers_str.split(sep) if e.strip()]
+                    break
+            if not entries:
+                entries = [teachers_str.strip()]
 
-            for pair in pairs:
-                pair = pair.strip()
-                if not pair:
+            for entry in entries:
+                if not entry:
                     continue
 
-                if "/" in pair:
-                    parts = pair.split("/", 1)
+                # نستخرج اسم المدرس من كل entry
+                if "::" in entry:
+                    # فورمات جديد: "عربي::ا/ احمد عبد القادر"
+                    parts = entry.split("::", 1)
                     subject = parts[0].strip()
                     teacher = parts[1].strip()
-                elif ":" in pair:
-                    parts = pair.split(":", 1)
-                    subject = parts[0].strip()
-                    teacher = parts[1].strip()
+                elif "/" in entry and not entry.startswith("ا/") and not entry.startswith("م/"):
+                    # فورمات وسط: "عربي/ا/ احمد" - أول / هو الفاصل
+                    first_slash = entry.index("/")
+                    subject = entry[:first_slash].strip()
+                    teacher = entry[first_slash+1:].strip()
                 else:
+                    # فورمات قديم: "عربي مستر احمد عبد القادر"
+                    # مفيش فاصل واضح - نحط كل النص كاسم مدرس
                     subject = ""
-                    teacher = pair.strip()
+                    teacher = entry.strip()
 
                 if not teacher:
                     continue
@@ -361,6 +370,7 @@ def get_teacher_stats(teacher_name: str = None) -> dict | list:
             teacher_name_lower = teacher_name.strip().lower()
             results = {}
             for t, students in teachers.items():
+                # بنبحث في اسم المدرس بالظبط (مش في السطر كله)
                 if teacher_name_lower in t.lower():
                     breakdown = {"ث1": 0, "ث2": 0, "ث3": 0}
                     for s in students:
@@ -370,10 +380,7 @@ def get_teacher_stats(teacher_name: str = None) -> dict | list:
                     results[t] = {"طلاب": students, "بالسنة": breakdown}
             return results
 
-        sorted_teachers = dict(
-            sorted(teachers.items(), key=lambda x: len(x[1]), reverse=True)
-        )
-        return sorted_teachers
+        return dict(sorted(teachers.items(), key=lambda x: len(x[1]), reverse=True))
 
     except Exception as e:
         print(f"❌ خطأ في إحصائيات المدرسين: {e}")
