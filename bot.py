@@ -172,10 +172,10 @@ def format_student_info(student: dict) -> str:
 
 
 def build_teachers_text(teachers: dict) -> str:
-    """بتحول dict المدرسين لنص: عربي::ا/ احمد | كيمياء::ا/ محمد"""
+    """بتحول dict المدرسين لنص: عربي/الأستاذ أحمد | كيمياء/الأستاذة سارة"""
     if not teachers:
         return ""
-    return " | ".join([f"{subj}::{teacher}" for subj, teacher in teachers.items() if teacher])
+    return " | ".join([f"{subj}/{teacher}" for subj, teacher in teachers.items() if teacher])
 
 
 # ====================================================
@@ -600,17 +600,26 @@ async def handle_callback(update: Update, context) -> None:
     # ====== إحصائيات ======
     elif data == "stats":
         stats = get_statistics_updated()
-        await query.edit_message_text(
-            f"📈 إحصائيات مركز الارائج\n\n"
-            f"👥 الإجمالي: {stats.get('الإجمالي', 0)}\n"
+        msg = (
+            f"📈 إحصائيات مركز الارائج\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"👥 إجمالي الطلاب: {stats.get('الإجمالي', 0)}\n"
+            f"✅ مسجلين مع مدرسين: {stats.get('مع_مدرسين', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"1️⃣ ث1: {stats.get('ث1', 0)}\n"
             f"2️⃣ ث2: {stats.get('ث2', 0)}\n"
-            f"3️⃣ ث3: {stats.get('ث3', 0)}\n\n"
+            f"3️⃣ ث3: {stats.get('ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"🏫 عام: {stats.get('عام', 0)}\n"
+            f"  ث1: {stats.get('عام_ث1', 0)} | ث2: {stats.get('عام_ث2', 0)} | ث3: {stats.get('عام_ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"🕌 أزهر: {stats.get('أزهر', 0)}\n"
-            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}",
-            reply_markup=back_keyboard()
+            f"  ث1: {stats.get('أزهر_ث1', 0)} | ث2: {stats.get('أزهر_ث2', 0)} | ث3: {stats.get('أزهر_ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}\n"
+            f"  ث1: {stats.get('بكالوريا_ث1', 0)} | ث2: {stats.get('بكالوريا_ث2', 0)} | ث3: {stats.get('بكالوريا_ث3', 0)}"
         )
+        await query.edit_message_text(msg, reply_markup=back_keyboard())
 
     # ====== آخر كود لكل سنة ======
     elif data == "last_codes":
