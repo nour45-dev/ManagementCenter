@@ -1243,16 +1243,22 @@ async def handle_text(update: Update, context) -> None:
 
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
-        for teacher, data_dict in results.items():
-            students = data_dict.get("طلاب", [])
-            breakdown = data_dict.get("بالسنة", {})
+        for teacher, data_val in results.items():
+            # الشكل الجديد: {"طلاب": [...], "بالسنة": {...}}
+            if isinstance(data_val, dict) and "طلاب" in data_val:
+                students = data_val["طلاب"]
+                breakdown = data_val.get("بالسنة", {})
+            else:
+                students = data_val
+                breakdown = {}
             response += f"\n👨‍🏫 {teacher}\n"
             response += f"📊 إجمالي الطلاب: {len(students)}\n"
-            response += (
-                f"  1️⃣ ث1: {breakdown.get('ث1', 0)} | "
-                f"2️⃣ ث2: {breakdown.get('ث2', 0)} | "
-                f"3️⃣ ث3: {breakdown.get('ث3', 0)}\n"
-            )
+            if breakdown:
+                response += (
+                    f"  1️⃣ ث1: {breakdown.get('ث1', 0)} | "
+                    f"2️⃣ ث2: {breakdown.get('ث2', 0)} | "
+                    f"3️⃣ ث3: {breakdown.get('ث3', 0)}\n"
+                )
             response += "📋 تفاصيل الطلاب:\n"
             for i, s in enumerate(students, 1):
                 response += (
