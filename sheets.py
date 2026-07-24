@@ -20,22 +20,19 @@ SCOPES = [
 def connect_to_sheet():
     """
     بتوصل بـ Google Sheets وترجع الورقة جاهزة للاستخدام
-    بتقرأ الـ credentials من متغير البيئة أو من ملف
     """
-    import os, json, tempfile
-
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if creds_json:
-        # Railway: بنقرأ الـ credentials من متغير البيئة
-        creds_dict = json.loads(creds_json)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    else:
-        # محلي: بنقرأ من الملف
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
-
+    # بنثبت هويتنا باستخدام ملف الـ credentials
+    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+    
+    # بنعمل اتصال بـ Google
     client = gspread.authorize(creds)
+    
+    # بنفتح الملف بالـ ID بتاعه
     spreadsheet = client.open_by_key(SHEET_ID)
+    
+    # بنفتح الورقة المطلوبة
     sheet = spreadsheet.worksheet(SHEET_NAME)
+    
     return sheet
 
 
@@ -262,19 +259,50 @@ def search_by_name(name: str) -> list:
 
 def get_statistics_updated() -> dict:
     """
-    إحصائيات موسعة تشمل التخصصات
+    إحصائيات موسعة - بتحسب الطلاب اللي عندهم مدرسين مسجلين بس
+    وبتكسر بالتفصيل: كل تخصص × كل سنة
     """
     try:
         sheet = connect_to_sheet()
         all_data = sheet.get_all_records()
+
+        # بنفلتر بس الطلاب اللي عندهم مدرسين مسجلين
+        active = [
+            s for s in all_data
+            if str(s.get("المدرسين", "")).strip()
+        ]
+
+        def count(lst, year=None, spec=None):
+            result = lst
+            if year:
+                result = [s for s in result if str(s.get("السنة الدراسية", "")).strip() == year]
+            if spec == "بكالوريا":
+                result = [s for s in result if "بكالوريا" in str(s.get("التخصص", ""))]
+            elif spec:
+                result = [s for s in result if str(s.get("التخصص", "")).strip() == spec]
+            return len(result)
+
         stats = {
-            "الإجمالي": len(all_data),
-            "ث1": len([s for s in all_data if s.get("السنة الدراسية") == "ث1"]),
-            "ث2": len([s for s in all_data if s.get("السنة الدراسية") == "ث2"]),
-            "ث3": len([s for s in all_data if s.get("السنة الدراسية") == "ث3"]),
-            "عام": len([s for s in all_data if s.get("التخصص") == "عام"]),
-            "أزهر": len([s for s in all_data if s.get("التخصص") == "أزهر"]),
-            "بكالوريا": len([s for s in all_data if "بكالوريا" in str(s.get("التخصص", ""))]),
+            # إجمالي عام
+            "الإجمالي":    count(active),
+            "ث1":          count(active, year="ث1"),
+            "ث2":          count(active, year="ث2"),
+            "ث3":          count(active, year="ث3"),
+            # عام
+            "عام":         count(active, spec="عام"),
+            "عام_ث1":      count(active, year="ث1", spec="عام"),
+            "عام_ث2":      count(active, year="ث2", spec="عام"),
+            "عام_ث3":      count(active, year="ث3", spec="عام"),
+            # أزهر
+            "أزهر":        count(active, spec="أزهر"),
+            "أزهر_ث1":     count(active, year="ث1", spec="أزهر"),
+            "أزهر_ث2":     count(active, year="ث2", spec="أزهر"),
+            "أزهر_ث3":     count(active, year="ث3", spec="أزهر"),
+            # بكالوريا
+            "بكالوريا":    count(active, spec="بكالوريا"),
+            "بكالوريا_ث1": count(active, year="ث1", spec="بكالوريا"),
+            "بكالوريا_ث2": count(active, year="ث2", spec="بكالوريا"),
+            "بكالوريا_ث3": count(active, year="ث3", spec="بكالوريا"),
         }
         return stats
     except Exception as e:
@@ -282,31 +310,46 @@ def get_statistics_updated() -> dict:
         return {}
 
 
+
 def get_teacher_stats(teacher_name: str = None) -> dict | list:
     """
-    لو بعتلها اسم مدرس: بترجع كام طالب معاه وتفاصيلهم
-    لو مبعتلهاش اسم: بترجع كل المدرسين وعدد طلاب كل واحد
+    إحصائيات المدرسين - بتحسب بس الطلاب اللي مسجلين عندهم مدرسين
+    كل مدرس فيه تفاصيل الطلاب + تكسير بالسنة (ث1/ث2/ث3)
     """
     try:
         sheet = connect_to_sheet()
         all_data = sheet.get_all_records()
 
-        # dict فيه كل مدرس وطلابه
         teachers = {}
 
         for student in all_data:
-            teachers_str = str(student.get("المدرسين", ""))
-            if not teachers_str.strip():
+            teachers_str = str(student.get("المدرسين", "")).strip()
+            if not teachers_str:
                 continue
 
-            # المدرسين بتاعت الطالب مكتوبة زي:
-            # "عربي: مستر أحمد، رياضة: مستر محمد"
-            for pair in teachers_str.split("،"):
+            separators = ["|", "،", ","]
+            pairs = [teachers_str]
+            for sep in separators:
+                new_pairs = []
+                for chunk in pairs:
+                    new_pairs.extend(chunk.split(sep))
+                pairs = new_pairs
+
+            for pair in pairs:
                 pair = pair.strip()
-                if ":" in pair:
+                if not pair:
+                    continue
+
+                if "/" in pair:
+                    parts = pair.split("/", 1)
+                    subject = parts[0].strip()
+                    teacher = parts[1].strip()
+                elif ":" in pair:
                     parts = pair.split(":", 1)
+                    subject = parts[0].strip()
                     teacher = parts[1].strip()
                 else:
+                    subject = ""
                     teacher = pair.strip()
 
                 if not teacher:
@@ -315,22 +358,25 @@ def get_teacher_stats(teacher_name: str = None) -> dict | list:
                 if teacher not in teachers:
                     teachers[teacher] = []
                 teachers[teacher].append({
-                    "اسم": student.get("الاسم", ""),
-                    "كود": student.get("الكود", ""),
-                    "السنة": student.get("السنة الدراسية", ""),
-                    "المادة": parts[0].strip() if ":" in pair else ""
+                    "اسم":    student.get("الاسم", ""),
+                    "كود":    student.get("الكود", ""),
+                    "السنة":  str(student.get("السنة الدراسية", "")).strip(),
+                    "المادة": subject,
                 })
 
         if teacher_name:
-            # بحث جزئي - مش لازم الاسم كامل
             teacher_name_lower = teacher_name.strip().lower()
             results = {}
             for t, students in teachers.items():
                 if teacher_name_lower in t.lower():
-                    results[t] = students
+                    breakdown = {"ث1": 0, "ث2": 0, "ث3": 0}
+                    for s in students:
+                        yr = s.get("السنة", "")
+                        if yr in breakdown:
+                            breakdown[yr] += 1
+                    results[t] = {"طلاب": students, "بالسنة": breakdown}
             return results
 
-        # كل المدرسين مرتبين من الأكتر للأقل
         sorted_teachers = dict(
             sorted(teachers.items(), key=lambda x: len(x[1]), reverse=True)
         )
