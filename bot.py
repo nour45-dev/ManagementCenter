@@ -600,17 +600,28 @@ async def handle_callback(update: Update, context) -> None:
     # ====== إحصائيات ======
     elif data == "stats":
         stats = get_statistics_updated()
-        await query.edit_message_text(
-            f"📈 إحصائيات مركز الارائج\n\n"
-            f"👥 الإجمالي: {stats.get('الإجمالي', 0)}\n"
-            f"1️⃣ ث1: {stats.get('ث1', 0)}\n"
-            f"2️⃣ ث2: {stats.get('ث2', 0)}\n"
-            f"3️⃣ ث3: {stats.get('ث3', 0)}\n\n"
+        msg = (
+            f"📈 إحصائيات مركز الارائج\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"👥 إجمالي الطلاب المسجلين: {stats.get('الإجمالي', 0)}\n"
+            f"✅ مسجلين مع مواد ومدرسين: {stats.get('مع_مدرسين', 0)}\n"
+            f"  ث1: {stats.get('نشط_ث1', 0)} | ث2: {stats.get('نشط_ث2', 0)} | ث3: {stats.get('نشط_ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"📚 توزيع كل الطلاب بالسنة:\n"
+            f"  1️⃣ ث1: {stats.get('ث1', 0)}\n"
+            f"  2️⃣ ث2: {stats.get('ث2', 0)}\n"
+            f"  3️⃣ ث3: {stats.get('ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"🏫 عام: {stats.get('عام', 0)}\n"
+            f"  ث1: {stats.get('عام_ث1', 0)} | ث2: {stats.get('عام_ث2', 0)} | ث3: {stats.get('عام_ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"🕌 أزهر: {stats.get('أزهر', 0)}\n"
-            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}",
-            reply_markup=back_keyboard()
+            f"  ث1: {stats.get('أزهر_ث1', 0)} | ث2: {stats.get('أزهر_ث2', 0)} | ث3: {stats.get('أزهر_ث3', 0)}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}\n"
+            f"  ث1: {stats.get('بكالوريا_ث1', 0)} | ث2: {stats.get('بكالوريا_ث2', 0)} | ث3: {stats.get('بكالوريا_ث3', 0)}"
         )
+        await query.edit_message_text(msg, reply_markup=back_keyboard())
 
     # ====== آخر كود لكل سنة ======
     elif data == "last_codes":
@@ -1236,27 +1247,34 @@ async def handle_text(update: Update, context) -> None:
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
         for teacher, data_val in results.items():
-            # بندعم الشكلين: القديم (list) والجديد (dict مع طلاب وبالسنة)
             if isinstance(data_val, dict) and "طلاب" in data_val:
-                students  = data_val["طلاب"]
-                breakdown = data_val.get("بالسنة", {})
+                students   = data_val["طلاب"]
+                by_year    = data_val.get("بالسنة", {})
+                by_spec    = data_val.get("بالتخصص", {})
             else:
-                students  = data_val
-                breakdown = {}
+                students   = data_val
+                by_year    = {}
+                by_spec    = {}
 
             response += f"\n👨‍🏫 {teacher}\n"
             response += f"📊 إجمالي الطلاب: {len(students)}\n"
-            if breakdown:
+            if by_year:
                 response += (
-                    f"  1️⃣ ث1: {breakdown.get('ث1', 0)} | "
-                    f"2️⃣ ث2: {breakdown.get('ث2', 0)} | "
-                    f"3️⃣ ث3: {breakdown.get('ث3', 0)}\n"
+                    f"  1️⃣ ث1: {by_year.get('ث1', 0)} | "
+                    f"2️⃣ ث2: {by_year.get('ث2', 0)} | "
+                    f"3️⃣ ث3: {by_year.get('ث3', 0)}\n"
+                )
+            if by_spec:
+                response += (
+                    f"  🏫 عام: {by_spec.get('عام', 0)} | "
+                    f"🕌 أزهر: {by_spec.get('أزهر', 0)} | "
+                    f"🎓 بكالوريا: {by_spec.get('بكالوريا', 0)}\n"
                 )
             response += "📋 تفاصيل الطلاب:\n"
             for i, s in enumerate(students, 1):
                 response += (
                     f"  {i}. {s.get('اسم', '')} "
-                    f"({s.get('السنة', '')}) "
+                    f"({s.get('السنة', '')} - {s.get('التخصص', '')}) "
                     f"- {s.get('المادة', '')}\n"
                 )
             response += "━━━━━━━━━━━━━━━━\n"
