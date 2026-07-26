@@ -1,27 +1,8 @@
 # ====================================================
-# keyboards.py - النسخة الكاملة مع تعديل بضغطة زر
+# keyboards.py
 # ====================================================
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import SUBJECTS, TEACHERS
-
-
-def teachers_keyboard(subject: str) -> InlineKeyboardMarkup:
-    """
-    بتعرض أزرار المدرسين المتاحين لمادة معينة
-    مع زرار 'تخطي' لو مش عايز يختار
-    """
-    teachers_list = TEACHERS.get(subject, [])
-    keyboard = []
-    for teacher in teachers_list:
-        keyboard.append([InlineKeyboardButton(
-            f"👨‍🏫 {teacher}", callback_data=f"pick_teacher_{subject}_{teacher}"
-        )])
-    keyboard.append([InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")])
-    keyboard.append([InlineKeyboardButton("✍️ اكتب اسم تاني", callback_data=f"write_teacher_{subject}")])
-    return InlineKeyboardMarkup(keyboard)
-
-
 
 
 def main_menu_keyboard():
@@ -42,7 +23,6 @@ def main_menu_keyboard():
 
 
 def student_actions_keyboard(code: str):
-    """أزرار الأكشن على الطالب بعد البحث"""
     keyboard = [
         [InlineKeyboardButton("✏️ تعديل بيانات", callback_data=f"smartedit_{code}")],
         [InlineKeyboardButton("🗑️ حذف الطالب", callback_data=f"delete_{code}")],
@@ -52,36 +32,14 @@ def student_actions_keyboard(code: str):
 
 
 def smart_edit_keyboard(student: dict) -> InlineKeyboardMarkup:
-    """
-    بيعرض البيانات الحالية للطالب وكل زر فيه القيمة الحالية
-    م. وفاء تضغط على اللي عايزاه تعدله مباشرة
-    """
     code = student.get("الكود", "")
     keyboard = [
-        [InlineKeyboardButton(
-            f"👤 الاسم: {student.get('الاسم', '')}",
-            callback_data=f"sefield_{code}_الاسم"
-        )],
-        [InlineKeyboardButton(
-            f"📍 المنطقة: {student.get('المنطقة', '')}",
-            callback_data=f"sefield_{code}_المنطقة"
-        )],
-        [InlineKeyboardButton(
-            f"📱 التليفون: {student.get('التليفون', '')}",
-            callback_data=f"sefield_{code}_التليفون"
-        )],
-        [InlineKeyboardButton(
-            f"👨‍👧 ولي الأمر: {student.get('ولي الأمر', '')}",
-            callback_data=f"sefield_{code}_ولي الأمر"
-        )],
-        [InlineKeyboardButton(
-            f"📚 السنة: {student.get('السنة الدراسية', '')}",
-            callback_data=f"sefield_{code}_السنة الدراسية"
-        )],
-        [InlineKeyboardButton(
-            f"🎓 التخصص: {student.get('التخصص', '')}",
-            callback_data=f"sefield_{code}_التخصص"
-        )],
+        [InlineKeyboardButton(f"👤 الاسم: {student.get('الاسم', '')}", callback_data=f"sefield_{code}_الاسم")],
+        [InlineKeyboardButton(f"📍 المنطقة: {student.get('المنطقة', '')}", callback_data=f"sefield_{code}_المنطقة")],
+        [InlineKeyboardButton(f"📱 التليفون: {student.get('التليفون', '')}", callback_data=f"sefield_{code}_التليفون")],
+        [InlineKeyboardButton(f"👨‍👧 ولي الأمر: {student.get('ولي الأمر', '')}", callback_data=f"sefield_{code}_ولي الأمر")],
+        [InlineKeyboardButton(f"📚 السنة: {student.get('السنة الدراسية', '')}", callback_data=f"sefield_{code}_السنة الدراسية")],
+        [InlineKeyboardButton(f"🎓 التخصص: {student.get('التخصص', '')}", callback_data=f"sefield_{code}_التخصص")],
         [InlineKeyboardButton(
             f"📖 المواد: {student.get('المواد', '')[:25]}{'...' if len(student.get('المواد',''))>25 else ''}",
             callback_data=f"sefield_{code}_المواد"
@@ -96,8 +54,20 @@ def smart_edit_keyboard(student: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def teachers_keyboard(subject: str) -> InlineKeyboardMarkup:
+    """أزرار المدرسين لكل مادة"""
+    teachers_list = TEACHERS.get(subject, [])
+    keyboard = []
+    for teacher in teachers_list:
+        keyboard.append([InlineKeyboardButton(
+            f"👨‍🏫 {teacher}", callback_data=f"pick_teacher_{subject}_{teacher}"
+        )])
+    keyboard.append([InlineKeyboardButton("✍️ اكتب اسم تاني", callback_data=f"write_teacher_{subject}")])
+    keyboard.append([InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")])
+    return InlineKeyboardMarkup(keyboard)
+
+
 def image_actions_keyboard():
-    """أزرار ما بعد تحليل الصورة"""
     keyboard = [
         [InlineKeyboardButton("✅ صح، احفظ", callback_data="confirm_image_save")],
         [InlineKeyboardButton("👤 تعديل الاسم", callback_data="imgedit_اسم"),
@@ -115,14 +85,11 @@ def image_actions_keyboard():
 
 
 def subjects_keyboard(year: str, selected: list = [], teachers: dict = {}):
-    """
-    أزرار المواد - لو مادة اتختارت بيبين ✅ واسم المدرس لو موجود
-    """
     subjects = SUBJECTS.get(year, [])
     keyboard = []
     for i in range(0, len(subjects), 2):
         row = []
-        for j in [i, i+1]:
+        for j in [i, i + 1]:
             if j >= len(subjects):
                 break
             s = subjects[j]
@@ -133,10 +100,7 @@ def subjects_keyboard(year: str, selected: list = [], teachers: dict = {}):
                 label = s
             row.append(InlineKeyboardButton(label, callback_data=f"subj_{s}"))
         keyboard.append(row)
-
-    keyboard.append([InlineKeyboardButton(
-        f"✅ تأكيد ({len(selected)} مادة)", callback_data="confirm_subjects"
-    )])
+    keyboard.append([InlineKeyboardButton(f"✅ تأكيد ({len(selected)} مادة)", callback_data="confirm_subjects")])
     keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
     return InlineKeyboardMarkup(keyboard)
 
