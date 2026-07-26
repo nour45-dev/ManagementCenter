@@ -7,7 +7,7 @@ import json
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from config import BOT_TOKEN, ADMIN_ID, SUBJECTS
+from config import BOT_TOKEN, ADMIN_ID, SUBJECTS, TEACHERS
 from sheets import (
     setup_sheet, add_student, search_by_code, search_by_name,
     get_students_by_year, update_student, delete_student,
@@ -19,7 +19,7 @@ from keyboards import (
     student_actions_keyboard, smart_edit_keyboard,
     edit_fields_keyboard, image_actions_keyboard,
     report_type_keyboard, report_content_keyboard,
-    confirm_delete_keyboard, back_keyboard
+    confirm_delete_keyboard, back_keyboard, teachers_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
@@ -158,7 +158,7 @@ def format_student_info(student: dict) -> str:
         f"📋 بيانات الطالب\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"👤 الاسم: {student.get('الاسم', '')}\n"
-        f"🔑 الكود: {student.get('الكود', '')}\n"
+        f"🔑 الكود: {str(student.get('الكود', ''))}\n"
         f"📍 المنطقة: {student.get('المنطقة', '')}\n"
         f"📱 التليفون: {student.get('التليفون', '')}\n"
         f"👨‍👧 ولي الأمر: {student.get('ولي الأمر', '')}\n"
@@ -175,7 +175,7 @@ def build_teachers_text(teachers: dict) -> str:
     """بتحول dict المدرسين لنص: عربي/الأستاذ أحمد | كيمياء/الأستاذة سارة"""
     if not teachers:
         return ""
-    return " | ".join([f"{subj}/{teacher}" for subj, teacher in teachers.items() if teacher])
+    return " | ".join([f"{subj}/{teacher}" for subj, teacher in teachers.items() if teacher and teacher not in ["كلهم","الكل"]])
 
 
 # ====================================================
@@ -603,11 +603,11 @@ async def handle_callback(update: Update, context) -> None:
         msg = (
             f"📈 إحصائيات مركز الارائج\n"
             f"━━━━━━━━━━━━━━━━\n"
-            f"👥 إجمالي الطلاب المسجلين: {stats.get('الإجمالي', 0)}\n"
-            f"✅ مسجلين مع مواد ومدرسين: {stats.get('مع_مدرسين', 0)}\n"
+            f"👥 إجمالي الطلاب: {stats.get('الإجمالي', 0)}\n"
+            f"✅ مع مواد ومدرسين: {stats.get('مع_مدرسين', 0)}\n"
             f"  ث1: {stats.get('نشط_ث1', 0)} | ث2: {stats.get('نشط_ث2', 0)} | ث3: {stats.get('نشط_ث3', 0)}\n"
             f"━━━━━━━━━━━━━━━━\n"
-            f"📚 توزيع كل الطلاب بالسنة:\n"
+            f"📚 توزيع بالسنة:\n"
             f"  1️⃣ ث1: {stats.get('ث1', 0)}\n"
             f"  2️⃣ ث2: {stats.get('ث2', 0)}\n"
             f"  3️⃣ ث3: {stats.get('ث3', 0)}\n"
@@ -867,19 +867,9 @@ async def handle_callback(update: Update, context) -> None:
 
         # بنحفظ المواد ونبدأ طلب المدرسين
         uid_data["المواد"] = ", ".join(selected)
-        uid_data["pending_teachers"] = list(selected)  # قائمة المواد اللي لسه محتاجة مدرس
+        uid_data["pending_teachers"] = list(selected)
         uid_data["teachers_dict"] = uid_data.get("teachers_dict", {})
-
-        # نطلب مدرس أول مادة
-        next_subject = uid_data["pending_teachers"][0]
-        user_state[uid] = GET_TEACHER
-        await query.edit_message_text(
-            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
-            f"(أو اضغطي تخطي لو مش عايزاه)",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
-            ])
-        )
+        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
 
     # ====== تخطي مدرس مادة ======
     elif data.startswith("skip_teacher_"):
@@ -887,8 +877,33 @@ async def handle_callback(update: Update, context) -> None:
         uid_data = temp_data.get(uid, {})
         if subject in uid_data.get("pending_teachers", []):
             uid_data["pending_teachers"].remove(subject)
-
         await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
+
+    # ====== اختيار مدرس من الأزرار ======
+    elif data.startswith("pick_teacher_"):
+        uid_data = temp_data.get(uid, {})
+        pending = uid_data.get("pending_teachers", [])
+        subject = pending[0] if pending else ""
+        # اسم المدرس = ما بعد subject_
+        rest = data[len("pick_teacher_"):]
+        teacher = rest[len(subject)+1:] if subject and rest.startswith(subject+"_") else rest
+        if subject:
+            uid_data.setdefault("teachers_dict", {})[subject] = teacher
+            if subject in pending:
+                pending.remove(subject)
+        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
+
+    # ====== كتابة اسم مدرس يدوياً ======
+    elif data.startswith("write_teacher_"):
+        subject = data[len("write_teacher_"):]
+        context.user_data["writing_teacher_for"] = subject
+        user_state[uid] = GET_TEACHER
+        await query.edit_message_text(
+            f"✍️ اكتبي اسم مدرس مادة: {subject}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")
+            ]])
+        )
 
     # ====== spec_ و bacc_ ======
     elif data.startswith("spec_") or data.startswith("editspec_"):
@@ -1042,20 +1057,14 @@ async def _process_next_teacher(update, context, uid, uid_data, from_callback=Fa
     pending = uid_data.get("pending_teachers", [])
 
     if pending:
-        # لسه في مواد
         next_subject = pending[0]
         user_state[uid] = GET_TEACHER
-        text = (
-            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
-            f"(أو اضغطي تخطي)"
-        )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
-        ])
+        text = f"👨‍🏫 اختاري مدرس مادة:\n📖 {next_subject}"
+        kb = teachers_keyboard(next_subject)
         if from_callback:
-            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+            await update.callback_query.edit_message_text(text, reply_markup=kb)
         else:
-            await update.message.reply_text(text, reply_markup=keyboard)
+            await update.message.reply_text(text, reply_markup=kb)
     else:
         # خلصنا كل المواد - نحفظ الطالب
         user_state.pop(uid, None)
@@ -1184,10 +1193,12 @@ async def handle_text(update: Update, context) -> None:
     elif state == GET_TEACHER:
         uid_data = temp_data.get(uid, {})
         pending = uid_data.get("pending_teachers", [])
-        if pending:
-            current_subject = pending[0]
-            uid_data["teachers_dict"][current_subject] = text
-            uid_data["pending_teachers"].pop(0)
+        writing_for = context.user_data.pop("writing_teacher_for", None)
+        current_subject = writing_for if writing_for else (pending[0] if pending else None)
+        if current_subject:
+            uid_data.setdefault("teachers_dict", {})[current_subject] = text
+            if current_subject in pending:
+                pending.remove(current_subject)
         await _process_next_teacher(update, context, uid, uid_data, from_callback=False)
 
     # ====== البحث بالكود ======
@@ -1244,38 +1255,36 @@ async def handle_text(update: Update, context) -> None:
             )
             return
 
-        # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
         for teacher, data_val in results.items():
             if isinstance(data_val, dict) and "طلاب" in data_val:
-                students   = data_val["طلاب"]
-                by_year    = data_val.get("بالسنة", {})
-                by_spec    = data_val.get("بالتخصص", {})
+                students  = data_val["طلاب"]
+                by_year   = data_val.get("بالسنة", {})
+                by_spec   = data_val.get("بالتخصص", {})
             else:
-                students   = data_val
-                by_year    = {}
-                by_spec    = {}
-
+                students  = data_val
+                by_year   = {}
+                by_spec   = {}
             response += f"\n👨‍🏫 {teacher}\n"
             response += f"📊 إجمالي الطلاب: {len(students)}\n"
             if by_year:
                 response += (
-                    f"  1️⃣ ث1: {by_year.get('ث1', 0)} | "
-                    f"2️⃣ ث2: {by_year.get('ث2', 0)} | "
-                    f"3️⃣ ث3: {by_year.get('ث3', 0)}\n"
+                    f"  1️⃣ ث1: {by_year.get('ث1',0)} | "
+                    f"2️⃣ ث2: {by_year.get('ث2',0)} | "
+                    f"3️⃣ ث3: {by_year.get('ث3',0)}\n"
                 )
             if by_spec:
                 response += (
-                    f"  🏫 عام: {by_spec.get('عام', 0)} | "
-                    f"🕌 أزهر: {by_spec.get('أزهر', 0)} | "
-                    f"🎓 بكالوريا: {by_spec.get('بكالوريا', 0)}\n"
+                    f"  🏫 عام: {by_spec.get('عام',0)} | "
+                    f"🕌 أزهر: {by_spec.get('أزهر',0)} | "
+                    f"🎓 بكالوريا: {by_spec.get('بكالوريا',0)}\n"
                 )
             response += "📋 تفاصيل الطلاب:\n"
             for i, s in enumerate(students, 1):
                 response += (
-                    f"  {i}. {s.get('اسم', '')} "
-                    f"({s.get('السنة', '')} - {s.get('التخصص', '')}) "
-                    f"- {s.get('المادة', '')}\n"
+                    f"  {i}. {s.get('اسم','')} "
+                    f"({s.get('السنة','')} - {s.get('التخصص','')}) "
+                    f"- {s.get('المادة','')}\n"
                 )
             response += "━━━━━━━━━━━━━━━━\n"
 
@@ -1283,7 +1292,6 @@ async def handle_text(update: Update, context) -> None:
             [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
             [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
         ])
-
         if len(response) > 4000:
             chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
             await wait_msg.edit_text(chunks[0])
