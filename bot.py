@@ -7,7 +7,7 @@ import json
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from config import BOT_TOKEN, ADMIN_ID, SUBJECTS, TEACHERS
+from config import BOT_TOKEN, ADMIN_ID, SUBJECTS
 from sheets import (
     setup_sheet, add_student, search_by_code, search_by_name,
     get_students_by_year, update_student, delete_student,
@@ -19,7 +19,7 @@ from keyboards import (
     student_actions_keyboard, smart_edit_keyboard,
     edit_fields_keyboard, image_actions_keyboard,
     report_type_keyboard, report_content_keyboard,
-    confirm_delete_keyboard, back_keyboard, teachers_keyboard
+    confirm_delete_keyboard, back_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
@@ -158,7 +158,7 @@ def format_student_info(student: dict) -> str:
         f"📋 بيانات الطالب\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"👤 الاسم: {student.get('الاسم', '')}\n"
-        f"🔑 الكود: {str(student.get('الكود', ''))}\n"
+        f"🔑 الكود: {student.get('الكود', '')}\n"
         f"📍 المنطقة: {student.get('المنطقة', '')}\n"
         f"📱 التليفون: {student.get('التليفون', '')}\n"
         f"👨‍👧 ولي الأمر: {student.get('ولي الأمر', '')}\n"
@@ -175,7 +175,7 @@ def build_teachers_text(teachers: dict) -> str:
     """بتحول dict المدرسين لنص: عربي/الأستاذ أحمد | كيمياء/الأستاذة سارة"""
     if not teachers:
         return ""
-    return " | ".join([f"{subj}/{teacher}" for subj, teacher in teachers.items() if teacher and teacher not in ["كلهم","الكل"]])
+    return " | ".join([f"{subj}/{teacher}" for subj, teacher in teachers.items() if teacher])
 
 
 # ====================================================
@@ -600,28 +600,17 @@ async def handle_callback(update: Update, context) -> None:
     # ====== إحصائيات ======
     elif data == "stats":
         stats = get_statistics_updated()
-        msg = (
-            f"📈 إحصائيات مركز الارائج\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"👥 إجمالي الطلاب: {stats.get('الإجمالي', 0)}\n"
-            f"✅ مع مواد ومدرسين: {stats.get('مع_مدرسين', 0)}\n"
-            f"  ث1: {stats.get('نشط_ث1', 0)} | ث2: {stats.get('نشط_ث2', 0)} | ث3: {stats.get('نشط_ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"📚 توزيع بالسنة:\n"
-            f"  1️⃣ ث1: {stats.get('ث1', 0)}\n"
-            f"  2️⃣ ث2: {stats.get('ث2', 0)}\n"
-            f"  3️⃣ ث3: {stats.get('ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
+        await query.edit_message_text(
+            f"📈 إحصائيات مركز الارائج\n\n"
+            f"👥 الإجمالي: {stats.get('الإجمالي', 0)}\n"
+            f"1️⃣ ث1: {stats.get('ث1', 0)}\n"
+            f"2️⃣ ث2: {stats.get('ث2', 0)}\n"
+            f"3️⃣ ث3: {stats.get('ث3', 0)}\n\n"
             f"🏫 عام: {stats.get('عام', 0)}\n"
-            f"  ث1: {stats.get('عام_ث1', 0)} | ث2: {stats.get('عام_ث2', 0)} | ث3: {stats.get('عام_ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
             f"🕌 أزهر: {stats.get('أزهر', 0)}\n"
-            f"  ث1: {stats.get('أزهر_ث1', 0)} | ث2: {stats.get('أزهر_ث2', 0)} | ث3: {stats.get('أزهر_ث3', 0)}\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}\n"
-            f"  ث1: {stats.get('بكالوريا_ث1', 0)} | ث2: {stats.get('بكالوريا_ث2', 0)} | ث3: {stats.get('بكالوريا_ث3', 0)}"
+            f"🎓 بكالوريا: {stats.get('بكالوريا', 0)}",
+            reply_markup=back_keyboard()
         )
-        await query.edit_message_text(msg, reply_markup=back_keyboard())
 
     # ====== آخر كود لكل سنة ======
     elif data == "last_codes":
@@ -677,6 +666,126 @@ async def handle_callback(update: Update, context) -> None:
             )
         else:
             await query.edit_message_text(text, reply_markup=back_keyboard())
+
+    # ====== PDF تقرير مدرس ======
+    elif data == "teacher_pdf":
+        results = context.user_data.get("teacher_search_results", {})
+        query_text = context.user_data.get("teacher_search_query", "مدرس")
+        if not results:
+            await query.answer("مفيش بيانات، ابحثي عن المدرس أول", show_alert=True)
+            return
+
+        await query.edit_message_text("⏳ جاري إنشاء PDF...")
+
+        import os, tempfile
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import cm
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            import arabic_reshaper
+            from bidi.algorithm import get_display
+
+            def ar(text):
+                return get_display(arabic_reshaper.reshape(str(text)))
+
+            font_path = "Amiri-Regular.ttf"
+            if os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("Amiri", font_path))
+                font_name = "Amiri"
+            else:
+                font_name = "Helvetica"
+
+            pdf_path = tempfile.mktemp(suffix=".pdf")
+            doc = SimpleDocTemplate(pdf_path, pagesize=A4,
+                                    rightMargin=1.5*cm, leftMargin=1.5*cm,
+                                    topMargin=2*cm, bottomMargin=2*cm)
+            story = []
+            title_style = ParagraphStyle("title", fontName=font_name, fontSize=16, alignment=1, spaceAfter=10)
+            sub_style   = ParagraphStyle("sub",   fontName=font_name, fontSize=11, alignment=1, spaceAfter=5)
+
+            for teacher, data_val in results.items():
+                if isinstance(data_val, dict) and "طلاب" in data_val:
+                    students = data_val["طلاب"]
+                    by_year  = data_val.get("بالسنة", {})
+                    by_spec  = data_val.get("بالتخصص", {})
+                else:
+                    students = data_val
+                    by_year  = {}
+                    by_spec  = {}
+
+                story.append(Paragraph(ar(f"تقرير طلاب: {teacher}"), title_style))
+                story.append(Paragraph(ar(f"إجمالي الطلاب: {len(students)}"), sub_style))
+                if by_year:
+                    story.append(Paragraph(ar(
+                        f"ث1: {by_year.get('ث1',0)}  |  ث2: {by_year.get('ث2',0)}  |  ث3: {by_year.get('ث3',0)}"
+                    ), sub_style))
+                if by_spec:
+                    story.append(Paragraph(ar(
+                        f"عام: {by_spec.get('عام',0)}  |  أزهر: {by_spec.get('أزهر',0)}  |  بكالوريا: {by_spec.get('بكالوريا',0)}"
+                    ), sub_style))
+                story.append(Spacer(1, 0.3*cm))
+
+                headers = [ar(h) for h in ["#","الاسم","الكود","التليفون","ولي الأمر","المنطقة","السنة","التخصص","المادة"]]
+                table_data = [headers]
+                for i, s in enumerate(students, 1):
+                    table_data.append([
+                        ar(str(i)),
+                        ar(s.get("اسم","")),
+                        ar(str(s.get("كود",""))),
+                        ar(str(s.get("التليفون",""))),
+                        ar(str(s.get("ولي_الامر",""))),
+                        ar(s.get("المنطقة","")),
+                        ar(s.get("السنة","")),
+                        ar(s.get("التخصص","")),
+                        ar(s.get("المادة","")),
+                    ])
+
+                col_w = [0.8*cm, 3.5*cm, 1.8*cm, 2.5*cm, 2.5*cm, 1.8*cm, 1.2*cm, 2*cm, 1.8*cm]
+                t = Table(table_data, colWidths=col_w, repeatRows=1)
+                t.setStyle(TableStyle([
+                    ("BACKGROUND",     (0,0), (-1,0),  colors.HexColor("#2c3e50")),
+                    ("TEXTCOLOR",      (0,0), (-1,0),  colors.white),
+                    ("FONTNAME",       (0,0), (-1,-1), font_name),
+                    ("FONTSIZE",       (0,0), (-1,0),  9),
+                    ("FONTSIZE",       (0,1), (-1,-1), 8),
+                    ("ALIGN",          (0,0), (-1,-1), "CENTER"),
+                    ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
+                    ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f2f2f2")]),
+                    ("GRID",           (0,0), (-1,-1), 0.5, colors.grey),
+                    ("TOPPADDING",     (0,0), (-1,-1), 4),
+                    ("BOTTOMPADDING",  (0,0), (-1,-1), 4),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 1*cm))
+
+            doc.build(story)
+            with open(pdf_path, "rb") as f_pdf:
+                await context.bot.send_document(
+                    chat_id=query.message.chat_id,
+                    document=f_pdf,
+                    filename=f"تقرير_{query_text}.pdf",
+                    caption=f"📄 تقرير طلاب: {query_text}"
+                )
+            os.remove(pdf_path)
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ تم إرسال PDF",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+                ])
+            )
+        except Exception as e:
+            print(f"❌ خطأ في PDF: {e}")
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=f"❌ حصل خطأ في PDF: {e}",
+                reply_markup=back_keyboard()
+            )
 
     # ====== بحث عن مدرس معين ======
     elif data == "search_teacher":
@@ -867,9 +976,19 @@ async def handle_callback(update: Update, context) -> None:
 
         # بنحفظ المواد ونبدأ طلب المدرسين
         uid_data["المواد"] = ", ".join(selected)
-        uid_data["pending_teachers"] = list(selected)
+        uid_data["pending_teachers"] = list(selected)  # قائمة المواد اللي لسه محتاجة مدرس
         uid_data["teachers_dict"] = uid_data.get("teachers_dict", {})
-        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
+
+        # نطلب مدرس أول مادة
+        next_subject = uid_data["pending_teachers"][0]
+        user_state[uid] = GET_TEACHER
+        await query.edit_message_text(
+            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
+            f"(أو اضغطي تخطي لو مش عايزاه)",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
+            ])
+        )
 
     # ====== تخطي مدرس مادة ======
     elif data.startswith("skip_teacher_"):
@@ -877,33 +996,8 @@ async def handle_callback(update: Update, context) -> None:
         uid_data = temp_data.get(uid, {})
         if subject in uid_data.get("pending_teachers", []):
             uid_data["pending_teachers"].remove(subject)
-        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
 
-    # ====== اختيار مدرس من الأزرار ======
-    elif data.startswith("pick_teacher_"):
-        uid_data = temp_data.get(uid, {})
-        pending = uid_data.get("pending_teachers", [])
-        subject = pending[0] if pending else ""
-        # اسم المدرس = ما بعد subject_
-        rest = data[len("pick_teacher_"):]
-        teacher = rest[len(subject)+1:] if subject and rest.startswith(subject+"_") else rest
-        if subject:
-            uid_data.setdefault("teachers_dict", {})[subject] = teacher
-            if subject in pending:
-                pending.remove(subject)
         await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
-
-    # ====== كتابة اسم مدرس يدوياً ======
-    elif data.startswith("write_teacher_"):
-        subject = data[len("write_teacher_"):]
-        context.user_data["writing_teacher_for"] = subject
-        user_state[uid] = GET_TEACHER
-        await query.edit_message_text(
-            f"✍️ اكتبي اسم مدرس مادة: {subject}",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")
-            ]])
-        )
 
     # ====== spec_ و bacc_ ======
     elif data.startswith("spec_") or data.startswith("editspec_"):
@@ -1057,14 +1151,20 @@ async def _process_next_teacher(update, context, uid, uid_data, from_callback=Fa
     pending = uid_data.get("pending_teachers", [])
 
     if pending:
+        # لسه في مواد
         next_subject = pending[0]
         user_state[uid] = GET_TEACHER
-        text = f"👨‍🏫 اختاري مدرس مادة:\n📖 {next_subject}"
-        kb = teachers_keyboard(next_subject)
+        text = (
+            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
+            f"(أو اضغطي تخطي)"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
+        ])
         if from_callback:
-            await update.callback_query.edit_message_text(text, reply_markup=kb)
+            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
         else:
-            await update.message.reply_text(text, reply_markup=kb)
+            await update.message.reply_text(text, reply_markup=keyboard)
     else:
         # خلصنا كل المواد - نحفظ الطالب
         user_state.pop(uid, None)
@@ -1193,12 +1293,10 @@ async def handle_text(update: Update, context) -> None:
     elif state == GET_TEACHER:
         uid_data = temp_data.get(uid, {})
         pending = uid_data.get("pending_teachers", [])
-        writing_for = context.user_data.pop("writing_teacher_for", None)
-        current_subject = writing_for if writing_for else (pending[0] if pending else None)
-        if current_subject:
-            uid_data.setdefault("teachers_dict", {})[current_subject] = text
-            if current_subject in pending:
-                pending.remove(current_subject)
+        if pending:
+            current_subject = pending[0]
+            uid_data["teachers_dict"][current_subject] = text
+            uid_data["pending_teachers"].pop(0)
         await _process_next_teacher(update, context, uid, uid_data, from_callback=False)
 
     # ====== البحث بالكود ======
@@ -1255,6 +1353,10 @@ async def handle_text(update: Update, context) -> None:
             )
             return
 
+        # نحفظ النتيجة عشان نولد PDF بعدين
+        context.user_data["teacher_search_results"] = results
+        context.user_data["teacher_search_query"] = text
+
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
         for teacher, data_val in results.items():
             if isinstance(data_val, dict) and "طلاب" in data_val:
@@ -1265,6 +1367,7 @@ async def handle_text(update: Update, context) -> None:
                 students  = data_val
                 by_year   = {}
                 by_spec   = {}
+
             response += f"\n👨‍🏫 {teacher}\n"
             response += f"📊 إجمالي الطلاب: {len(students)}\n"
             if by_year:
@@ -1279,25 +1382,20 @@ async def handle_text(update: Update, context) -> None:
                     f"🕌 أزهر: {by_spec.get('أزهر',0)} | "
                     f"🎓 بكالوريا: {by_spec.get('بكالوريا',0)}\n"
                 )
-            response += "📋 تفاصيل الطلاب:\n"
-            for i, s in enumerate(students, 1):
-                response += (
-                    f"  {i}. {s.get('اسم','')} "
-                    f"({s.get('السنة','')} - {s.get('التخصص','')}) "
-                    f"- {s.get('المادة','')}\n"
-                )
             response += "━━━━━━━━━━━━━━━━\n"
 
         kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📄 تحميل PDF بكل التفاصيل", callback_data="teacher_pdf")],
             [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
             [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
         ])
+
         if len(response) > 4000:
             chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
             await wait_msg.edit_text(chunks[0])
             for chunk in chunks[1:]:
                 await context.bot.send_message(chat_id=update.message.chat_id, text=chunk)
-            await context.bot.send_message(chat_id=update.message.chat_id, text="✅ انتهى", reply_markup=kb)
+            await context.bot.send_message(chat_id=update.message.chat_id, text="📄 تقرير PDF:", reply_markup=kb)
         else:
             await wait_msg.edit_text(response, reply_markup=kb)
 
