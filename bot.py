@@ -468,7 +468,8 @@ async def handle_callback(update: Update, context) -> None:
             context.user_data["smartedit_student"] = student
             await query.edit_message_text(
                 "✏️ اضغطي على الحقل اللي عايزاه تعدليه:\n"
-                "(كل زر فيه القيمة الحالية)",
+                "(كل زر فيه القيمة الحالية)\n"
+                "تقدري تعدلي كذا حقل ورا بعض، وفي الآخر دوسي «✅ خلاص، حفظ»",
                 reply_markup=smart_edit_keyboard(student)
             )
 
@@ -509,6 +510,7 @@ async def handle_callback(update: Update, context) -> None:
             user_state[uid] = EDIT_FIELD_VALUE
             context.user_data["edit_code"] = code
             context.user_data["edit_field"] = field
+            context.user_data["edit_source"] = "smartedit"
             await query.edit_message_text(
                 f"👨‍🏫 اكتبي المدرسين بالشكل ده:\n"
                 f"عربي/أ.محمد | كيمياء/أ.سارة | رياضة/أ.علي\n\n"
@@ -522,6 +524,7 @@ async def handle_callback(update: Update, context) -> None:
             context.user_data["edit_code"] = code
             context.user_data["edit_field"] = field
             context.user_data["smartedit_student"] = student
+            context.user_data["edit_source"] = "smartedit"
             user_state[uid] = EDIT_FIELD_VALUE
             await query.edit_message_text(
                 f"✏️ تعديل {field}\n\n"
@@ -1340,7 +1343,11 @@ async def handle_text(update: Update, context) -> None:
         code = student.get("الكود", "")
         user_state.pop(uid, None)
         if action == "edit":
-            await update.message.reply_text(info + "\n\nإيه اللي عايزاه تعدليه؟", reply_markup=edit_fields_keyboard(code))
+            context.user_data["smartedit_student"] = student
+            await update.message.reply_text(
+                info + "\n\nاضغطي على الحقل اللي عايزاه تعدليه (تقدري تعدلي كذا حقل ورا بعض):",
+                reply_markup=smart_edit_keyboard(student)
+            )
         else:
             await update.message.reply_text(info, reply_markup=student_actions_keyboard(code))
 
@@ -1383,11 +1390,37 @@ async def handle_text(update: Update, context) -> None:
             )
             return
 
+        # بنخزن النتايج عشان زرار PDF يقدر يستخدمها بعدين
+        context.user_data["teacher_search_results"] = results
+        context.user_data["teacher_search_query"]   = text
+
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
-        for teacher, students in results.items():
+        for teacher, data_val in results.items():
+            # get_teacher_stats(name) بترجع لكل مدرس: {"طلاب": [...], "بالسنة": {...}, "بالتخصص": {...}}
+            if isinstance(data_val, dict) and "طلاب" in data_val:
+                students = data_val["طلاب"]
+                by_year  = data_val.get("بالسنة", {})
+                by_spec  = data_val.get("بالتخصص", {})
+            else:
+                students = data_val
+                by_year  = {}
+                by_spec  = {}
+
             response += f"\n👨‍🏫 {teacher}\n"
             response += f"📊 عدد الطلاب: {len(students)}\n"
+            if by_year:
+                response += (
+                    f"  1️⃣ ث1: {by_year.get('ث1',0)} | "
+                    f"2️⃣ ث2: {by_year.get('ث2',0)} | "
+                    f"3️⃣ ث3: {by_year.get('ث3',0)}\n"
+                )
+            if by_spec:
+                response += (
+                    f"  🏫 عام: {by_spec.get('عام',0)} | "
+                    f"🕌 أزهر: {by_spec.get('أزهر',0)} | "
+                    f"🎓 بكالوريا: {by_spec.get('بكالوريا',0)}\n"
+                )
 
             # تفاصيل الطلاب
             for i, s in enumerate(students, 1):
@@ -1398,27 +1431,20 @@ async def handle_text(update: Update, context) -> None:
                 )
             response += "━━━━━━━━━━━━━━━━\n"
 
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📄 تحميل PDF بكل التفاصيل", callback_data="teacher_pdf")],
+            [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+        ])
+
         if len(response) > 4000:
             chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
             await wait_msg.edit_text(chunks[0])
             for chunk in chunks[1:]:
                 await context.bot.send_message(chat_id=update.message.chat_id, text=chunk)
-            await context.bot.send_message(
-                chat_id=update.message.chat_id,
-                text="✅ انتهى",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
-                ])
-            )
+            await context.bot.send_message(chat_id=update.message.chat_id, text="📄 تقرير PDF:", reply_markup=kb)
         else:
-            await wait_msg.edit_text(
-                response,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
-                ])
-            )
+            await wait_msg.edit_text(response, reply_markup=kb)
 
     # ====== تسجيل مجموعة ======
     elif state == BULK_INPUT:
@@ -1458,6 +1484,18 @@ async def handle_text(update: Update, context) -> None:
         field = context.user_data.get("edit_field")
         success = update_student(code, field, text)
         user_state.pop(uid, None)
+
+        # لو التعديل جايلنا من شاشة "التعديل الذكي" - نرجع لنفس الشاشة عشان تكملي تعديل حقل تاني
+        if success and context.user_data.get("edit_source") == "smartedit":
+            student = search_by_code(code)
+            if student:
+                context.user_data["smartedit_student"] = student
+                await update.message.reply_text(
+                    f"✅ تم تعديل {field}!\nالجديد: {text}\n\nإيه اللي عايزاه تعدله كمان؟",
+                    reply_markup=smart_edit_keyboard(student)
+                )
+                return
+
         msg = f"✅ تم تعديل {field}!\nالجديد: {text}" if success else "❌ حصل خطأ"
         await update.message.reply_text(msg, reply_markup=main_menu_keyboard())
 
