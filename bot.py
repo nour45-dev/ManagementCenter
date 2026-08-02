@@ -7,7 +7,7 @@ import json
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from config import BOT_TOKEN, ADMIN_ID, SUBJECTS
+from config import BOT_TOKEN, ADMIN_ID, SUBJECTS, TEACHERS
 from sheets import (
     setup_sheet, add_student, search_by_code, search_by_name,
     get_students_by_year, update_student, delete_student,
@@ -19,7 +19,7 @@ from keyboards import (
     student_actions_keyboard, smart_edit_keyboard,
     edit_fields_keyboard, image_actions_keyboard,
     report_type_keyboard, report_content_keyboard,
-    confirm_delete_keyboard, back_keyboard
+    confirm_delete_keyboard, back_keyboard, teachers_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
@@ -859,16 +859,7 @@ async def handle_callback(update: Update, context) -> None:
         uid_data["pending_teachers"] = list(selected)  # قائمة المواد اللي لسه محتاجة مدرس
         uid_data["teachers_dict"] = uid_data.get("teachers_dict", {})
 
-        # نطلب مدرس أول مادة
-        next_subject = uid_data["pending_teachers"][0]
-        user_state[uid] = GET_TEACHER
-        await query.edit_message_text(
-            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
-            f"(أو اضغطي تخطي لو مش عايزاه)",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
-            ])
-        )
+        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
 
     # ====== تخطي مدرس مادة ======
     elif data.startswith("skip_teacher_"):
@@ -876,8 +867,33 @@ async def handle_callback(update: Update, context) -> None:
         uid_data = temp_data.get(uid, {})
         if subject in uid_data.get("pending_teachers", []):
             uid_data["pending_teachers"].remove(subject)
-
         await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
+
+    # ====== اختيار مدرس من الأزرار ======
+    elif data.startswith("pick_teacher_"):
+        uid_data = temp_data.get(uid, {})
+        pending  = uid_data.get("pending_teachers", [])
+        subject  = pending[0] if pending else ""
+        # اسم المدرس = ما بعد "pick_teacher_{subject}_"
+        prefix  = f"pick_teacher_{subject}_"
+        teacher = data[len(prefix):] if data.startswith(prefix) else data.replace("pick_teacher_", "")
+        if subject:
+            uid_data.setdefault("teachers_dict", {})[subject] = teacher
+            if subject in pending:
+                pending.remove(subject)
+        await _process_next_teacher(update, context, uid, uid_data, from_callback=True)
+
+    # ====== كتابة اسم مدرس يدوياً ======
+    elif data.startswith("write_teacher_"):
+        subject = data[len("write_teacher_"):]
+        context.user_data["writing_teacher_for"] = subject
+        user_state[uid] = GET_TEACHER
+        await query.edit_message_text(
+            f"✍️ اكتبي اسم مدرس مادة: {subject}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{subject}")
+            ]])
+        )
 
     # ====== spec_ و bacc_ ======
     elif data.startswith("spec_") or data.startswith("editspec_"):
@@ -1022,6 +1038,7 @@ async def handle_callback(update: Update, context) -> None:
         else:
             await query.edit_message_text(report, reply_markup=main_menu_keyboard())
 
+
     # ====== PDF تقرير مدرس مرتب بالسنة ======
     elif data == "teacher_pdf":
         results = context.user_data.get("teacher_search_results", {})
@@ -1029,9 +1046,7 @@ async def handle_callback(update: Update, context) -> None:
         if not results:
             await query.answer("مفيش بيانات، ابحثي عن المدرس أول", show_alert=True)
             return
-
         await query.edit_message_text("⏳ جاري إنشاء PDF...")
-
         import os, tempfile
         try:
             from reportlab.lib.pagesizes import A4
@@ -1045,7 +1060,6 @@ async def handle_callback(update: Update, context) -> None:
             from bidi.algorithm import get_display
 
             def ar(t): return get_display(arabic_reshaper.reshape(str(t)))
-
             font_path = "Amiri-Regular.ttf"
             if os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont("Amiri", font_path))
@@ -1064,7 +1078,6 @@ async def handle_callback(update: Update, context) -> None:
             t4 = ParagraphStyle("t4", fontName=fn, fontSize=10, alignment=1, spaceAfter=3)
 
             def make_table(rows_data, col_w):
-                hdrs = rows_data[0]
                 t = Table(rows_data, colWidths=col_w, repeatRows=1)
                 t.setStyle(TableStyle([
                     ("BACKGROUND",     (0,0),(-1,0),  colors.HexColor("#2c3e50")),
@@ -1082,14 +1095,13 @@ async def handle_callback(update: Update, context) -> None:
                 return t
 
             col_w = [0.7*cm, 3.2*cm, 1.6*cm, 2.3*cm, 2.3*cm, 1.8*cm, 2*cm, 1.8*cm]
-            hdrs  = [ar(h) for h in ["#","الاسم","الكود","التليفون","ولي الأمر","المنطقة","التخصص","المادة"]]
-
+            hdrs  = [ar(h) for h in ["#","الاسم","الكود","التليفون","ولي الامر","المنطقة","التخصص","المادة"]]
             first_teacher = True
+
             for teacher, data_val in results.items():
                 if not first_teacher:
                     story.append(PageBreak())
                 first_teacher = False
-
                 if isinstance(data_val, dict) and "طلاب" in data_val:
                     students = data_val["طلاب"]
                     by_year  = data_val.get("بالسنة", {})
@@ -1100,52 +1112,41 @@ async def handle_callback(update: Update, context) -> None:
                     by_spec  = {}
 
                 story.append(Paragraph(ar(f"تقرير طلاب: {teacher}"), t1))
-                story.append(Paragraph(ar(f"إجمالي الطلاب: {len(students)}"), t2))
+                story.append(Paragraph(ar(f"اجمالي الطلاب: {len(students)}"), t2))
                 if by_year:
                     story.append(Paragraph(ar(
                         f"ث1: {by_year.get('ث1',0)}  |  ث2: {by_year.get('ث2',0)}  |  ث3: {by_year.get('ث3',0)}"
                     ), t3))
                 if by_spec:
                     story.append(Paragraph(ar(
-                        f"عام: {by_spec.get('عام',0)}  |  أزهر: {by_spec.get('أزهر',0)}  |  بكالوريا: {by_spec.get('بكالوريا',0)}"
+                        f"عام: {by_spec.get('عام',0)}  |  ازهر: {by_spec.get('أزهر',0)}  |  بكالوريا: {by_spec.get('بكالوريا',0)}"
                     ), t3))
                 story.append(Spacer(1, 0.4*cm))
 
-                # نرتب الطلاب بالسنة
                 for year_label in ["ث1", "ث2", "ث3"]:
-                    year_students = [s for s in students if s.get("السنة","") == year_label]
-                    if not year_students:
+                    yr_students = [s for s in students if s.get("السنة","") == year_label]
+                    if not yr_students:
                         continue
-
-                    # إحصائيات السنة دي
                     sp_count = {"عام": 0, "أزهر": 0, "بكالوريا": 0}
-                    for s in year_students:
+                    for s in yr_students:
                         sp = s.get("التخصص","")
                         if "بكالوريا" in sp: sp_count["بكالوريا"] += 1
                         elif sp == "أزهر":   sp_count["أزهر"] += 1
                         elif sp == "عام":    sp_count["عام"] += 1
 
-                    story.append(Paragraph(ar(f"━━ سنة {year_label} ━━"), t2))
+                    story.append(Paragraph(ar(f"سنة {year_label}"), t2))
                     story.append(Paragraph(ar(
-                        f"عدد الطلاب: {len(year_students)}  |  "
+                        f"عدد الطلاب: {len(yr_students)}  |  "
                         f"عام: {sp_count['عام']}  |  "
-                        f"أزهر: {sp_count['أزهر']}  |  "
+                        f"ازهر: {sp_count['أزهر']}  |  "
                         f"بكالوريا: {sp_count['بكالوريا']}"
                     ), t4))
                     story.append(Spacer(1, 0.2*cm))
-
                     rows = [hdrs]
-                    for i, s in enumerate(year_students, 1):
-                        rows.append([
-                            ar(i),
-                            ar(s.get("اسم","")),
-                            ar(s.get("كود","")),
-                            ar(s.get("التليفون","")),
-                            ar(s.get("ولي_الامر","")),
-                            ar(s.get("المنطقة","")),
-                            ar(s.get("التخصص","")),
-                            ar(s.get("المادة","")),
-                        ])
+                    for i, s in enumerate(yr_students, 1):
+                        rows.append([ar(i), ar(s.get("اسم","")), ar(s.get("كود","")),
+                                     ar(s.get("التليفون","")), ar(s.get("ولي_الامر","")),
+                                     ar(s.get("المنطقة","")), ar(s.get("التخصص","")), ar(s.get("المادة",""))])
                     story.append(make_table(rows, col_w))
                     story.append(Spacer(1, 0.5*cm))
 
@@ -1155,24 +1156,25 @@ async def handle_callback(update: Update, context) -> None:
                     chat_id=query.message.chat_id,
                     document=fp,
                     filename=f"تقرير_{query_text}.pdf",
-                    caption=f"📄 تقرير طلاب: {query_text}"
+                    caption=f"تقرير طلاب: {query_text}"
                 )
             os.remove(pdf_path)
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text="✅ تم إرسال PDF",
+                text="تم ارسال PDF",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+                    [InlineKeyboardButton("بحث عن مدرس تاني", callback_data="search_teacher")],
+                    [InlineKeyboardButton("القائمة الرئيسية", callback_data="back_main")],
                 ])
             )
         except Exception as e:
-            print(f"❌ خطأ في PDF: {e}")
+            print(f"خطا في PDF: {e}")
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text=f"❌ حصل خطأ في إنشاء PDF: {e}",
+                text=f"حصل خطا في انشاء PDF: {e}",
                 reply_markup=back_keyboard()
             )
+
 
 
 # ====================================================
@@ -1183,20 +1185,14 @@ async def _process_next_teacher(update, context, uid, uid_data, from_callback=Fa
     pending = uid_data.get("pending_teachers", [])
 
     if pending:
-        # لسه في مواد
         next_subject = pending[0]
         user_state[uid] = GET_TEACHER
-        text = (
-            f"👨‍🏫 اكتبي اسم مدرس مادة:\n📖 {next_subject}\n\n"
-            f"(أو اضغطي تخطي)"
-        )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭️ تخطي", callback_data=f"skip_teacher_{next_subject}")]
-        ])
+        text = f"👨‍🏫 اختاري مدرس مادة:\n📖 {next_subject}"
+        kb = teachers_keyboard(next_subject)
         if from_callback:
-            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+            await update.callback_query.edit_message_text(text, reply_markup=kb)
         else:
-            await update.message.reply_text(text, reply_markup=keyboard)
+            await update.message.reply_text(text, reply_markup=kb)
     else:
         # خلصنا كل المواد - نحفظ الطالب
         user_state.pop(uid, None)
@@ -1321,14 +1317,16 @@ async def handle_text(update: Update, context) -> None:
         user_state[uid] = GET_SPECIALIZATION
         await update.message.reply_text(f"✅ ولي الأمر: {text}\n\n6️⃣ إيه تخصص الطالب؟", reply_markup=specialization_keyboard())
 
-    # ====== اسم المدرس ======
+    # ====== اسم المدرس (كتابة يدوية) ======
     elif state == GET_TEACHER:
         uid_data = temp_data.get(uid, {})
-        pending = uid_data.get("pending_teachers", [])
-        if pending:
-            current_subject = pending[0]
-            uid_data["teachers_dict"][current_subject] = text
-            uid_data["pending_teachers"].pop(0)
+        pending  = uid_data.get("pending_teachers", [])
+        writing_for = context.user_data.pop("writing_teacher_for", None)
+        current_subject = writing_for if writing_for else (pending[0] if pending else None)
+        if current_subject:
+            uid_data.setdefault("teachers_dict", {})[current_subject] = text
+            if current_subject in pending:
+                pending.remove(current_subject)
         await _process_next_teacher(update, context, uid, uid_data, from_callback=False)
 
     # ====== البحث بالكود ======
@@ -1385,49 +1383,42 @@ async def handle_text(update: Update, context) -> None:
             )
             return
 
-        context.user_data["teacher_search_results"] = results
-        context.user_data["teacher_search_query"]   = text
-
+        # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
-        for teacher, data_val in results.items():
-            if isinstance(data_val, dict) and "طلاب" in data_val:
-                students = data_val["طلاب"]
-                by_year  = data_val.get("بالسنة", {})
-                by_spec  = data_val.get("بالتخصص", {})
-            else:
-                students = data_val
-                by_year  = {}
-                by_spec  = {}
+        for teacher, students in results.items():
             response += f"\n👨‍🏫 {teacher}\n"
-            response += f"📊 إجمالي الطلاب: {len(students)}\n"
-            if by_year:
+            response += f"📊 عدد الطلاب: {len(students)}\n"
+
+            # تفاصيل الطلاب
+            for i, s in enumerate(students, 1):
                 response += (
-                    f"  1️⃣ ث1: {by_year.get('ث1',0)} | "
-                    f"2️⃣ ث2: {by_year.get('ث2',0)} | "
-                    f"3️⃣ ث3: {by_year.get('ث3',0)}\n"
-                )
-            if by_spec:
-                response += (
-                    f"  🏫 عام: {by_spec.get('عام',0)} | "
-                    f"🕌 أزهر: {by_spec.get('أزهر',0)} | "
-                    f"🎓 بكالوريا: {by_spec.get('بكالوريا',0)}\n"
+                    f"  {i}. {s.get('اسم', '')} "
+                    f"({s.get('السنة', '')}) "
+                    f"- {s.get('المادة', '')}\n"
                 )
             response += "━━━━━━━━━━━━━━━━\n"
-
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📄 تحميل PDF بكل التفاصيل", callback_data="teacher_pdf")],
-            [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
-        ])
 
         if len(response) > 4000:
             chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
             await wait_msg.edit_text(chunks[0])
             for chunk in chunks[1:]:
                 await context.bot.send_message(chat_id=update.message.chat_id, text=chunk)
-            await context.bot.send_message(chat_id=update.message.chat_id, text="📄 تقرير PDF:", reply_markup=kb)
+            await context.bot.send_message(
+                chat_id=update.message.chat_id,
+                text="✅ انتهى",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+                ])
+            )
         else:
-            await wait_msg.edit_text(response, reply_markup=kb)
+            await wait_msg.edit_text(
+                response,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+                ])
+            )
 
     # ====== تسجيل مجموعة ======
     elif state == BULK_INPUT:
