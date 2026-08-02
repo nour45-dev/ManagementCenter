@@ -1022,6 +1022,158 @@ async def handle_callback(update: Update, context) -> None:
         else:
             await query.edit_message_text(report, reply_markup=main_menu_keyboard())
 
+    # ====== PDF تقرير مدرس مرتب بالسنة ======
+    elif data == "teacher_pdf":
+        results = context.user_data.get("teacher_search_results", {})
+        query_text = context.user_data.get("teacher_search_query", "مدرس")
+        if not results:
+            await query.answer("مفيش بيانات، ابحثي عن المدرس أول", show_alert=True)
+            return
+
+        await query.edit_message_text("⏳ جاري إنشاء PDF...")
+
+        import os, tempfile
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+            from reportlab.lib.styles import ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import cm
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            import arabic_reshaper
+            from bidi.algorithm import get_display
+
+            def ar(t): return get_display(arabic_reshaper.reshape(str(t)))
+
+            font_path = "Amiri-Regular.ttf"
+            if os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont("Amiri", font_path))
+                fn = "Amiri"
+            else:
+                fn = "Helvetica"
+
+            pdf_path = tempfile.mktemp(suffix=".pdf")
+            doc = SimpleDocTemplate(pdf_path, pagesize=A4,
+                                    rightMargin=1.5*cm, leftMargin=1.5*cm,
+                                    topMargin=2*cm, bottomMargin=2*cm)
+            story = []
+            t1 = ParagraphStyle("t1", fontName=fn, fontSize=16, alignment=1, spaceAfter=8)
+            t2 = ParagraphStyle("t2", fontName=fn, fontSize=13, alignment=1, spaceAfter=6)
+            t3 = ParagraphStyle("t3", fontName=fn, fontSize=11, alignment=1, spaceAfter=4)
+            t4 = ParagraphStyle("t4", fontName=fn, fontSize=10, alignment=1, spaceAfter=3)
+
+            def make_table(rows_data, col_w):
+                hdrs = rows_data[0]
+                t = Table(rows_data, colWidths=col_w, repeatRows=1)
+                t.setStyle(TableStyle([
+                    ("BACKGROUND",     (0,0),(-1,0),  colors.HexColor("#2c3e50")),
+                    ("TEXTCOLOR",      (0,0),(-1,0),  colors.white),
+                    ("FONTNAME",       (0,0),(-1,-1), fn),
+                    ("FONTSIZE",       (0,0),(-1,0),  9),
+                    ("FONTSIZE",       (0,1),(-1,-1), 8),
+                    ("ALIGN",          (0,0),(-1,-1), "CENTER"),
+                    ("VALIGN",         (0,0),(-1,-1), "MIDDLE"),
+                    ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, colors.HexColor("#f2f2f2")]),
+                    ("GRID",           (0,0),(-1,-1), 0.4, colors.grey),
+                    ("TOPPADDING",     (0,0),(-1,-1), 3),
+                    ("BOTTOMPADDING",  (0,0),(-1,-1), 3),
+                ]))
+                return t
+
+            col_w = [0.7*cm, 3.2*cm, 1.6*cm, 2.3*cm, 2.3*cm, 1.8*cm, 2*cm, 1.8*cm]
+            hdrs  = [ar(h) for h in ["#","الاسم","الكود","التليفون","ولي الأمر","المنطقة","التخصص","المادة"]]
+
+            first_teacher = True
+            for teacher, data_val in results.items():
+                if not first_teacher:
+                    story.append(PageBreak())
+                first_teacher = False
+
+                if isinstance(data_val, dict) and "طلاب" in data_val:
+                    students = data_val["طلاب"]
+                    by_year  = data_val.get("بالسنة", {})
+                    by_spec  = data_val.get("بالتخصص", {})
+                else:
+                    students = data_val
+                    by_year  = {}
+                    by_spec  = {}
+
+                story.append(Paragraph(ar(f"تقرير طلاب: {teacher}"), t1))
+                story.append(Paragraph(ar(f"إجمالي الطلاب: {len(students)}"), t2))
+                if by_year:
+                    story.append(Paragraph(ar(
+                        f"ث1: {by_year.get('ث1',0)}  |  ث2: {by_year.get('ث2',0)}  |  ث3: {by_year.get('ث3',0)}"
+                    ), t3))
+                if by_spec:
+                    story.append(Paragraph(ar(
+                        f"عام: {by_spec.get('عام',0)}  |  أزهر: {by_spec.get('أزهر',0)}  |  بكالوريا: {by_spec.get('بكالوريا',0)}"
+                    ), t3))
+                story.append(Spacer(1, 0.4*cm))
+
+                # نرتب الطلاب بالسنة
+                for year_label in ["ث1", "ث2", "ث3"]:
+                    year_students = [s for s in students if s.get("السنة","") == year_label]
+                    if not year_students:
+                        continue
+
+                    # إحصائيات السنة دي
+                    sp_count = {"عام": 0, "أزهر": 0, "بكالوريا": 0}
+                    for s in year_students:
+                        sp = s.get("التخصص","")
+                        if "بكالوريا" in sp: sp_count["بكالوريا"] += 1
+                        elif sp == "أزهر":   sp_count["أزهر"] += 1
+                        elif sp == "عام":    sp_count["عام"] += 1
+
+                    story.append(Paragraph(ar(f"━━ سنة {year_label} ━━"), t2))
+                    story.append(Paragraph(ar(
+                        f"عدد الطلاب: {len(year_students)}  |  "
+                        f"عام: {sp_count['عام']}  |  "
+                        f"أزهر: {sp_count['أزهر']}  |  "
+                        f"بكالوريا: {sp_count['بكالوريا']}"
+                    ), t4))
+                    story.append(Spacer(1, 0.2*cm))
+
+                    rows = [hdrs]
+                    for i, s in enumerate(year_students, 1):
+                        rows.append([
+                            ar(i),
+                            ar(s.get("اسم","")),
+                            ar(s.get("كود","")),
+                            ar(s.get("التليفون","")),
+                            ar(s.get("ولي_الامر","")),
+                            ar(s.get("المنطقة","")),
+                            ar(s.get("التخصص","")),
+                            ar(s.get("المادة","")),
+                        ])
+                    story.append(make_table(rows, col_w))
+                    story.append(Spacer(1, 0.5*cm))
+
+            doc.build(story)
+            with open(pdf_path, "rb") as fp:
+                await context.bot.send_document(
+                    chat_id=query.message.chat_id,
+                    document=fp,
+                    filename=f"تقرير_{query_text}.pdf",
+                    caption=f"📄 تقرير طلاب: {query_text}"
+                )
+            os.remove(pdf_path)
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ تم إرسال PDF",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
+                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+                ])
+            )
+        except Exception as e:
+            print(f"❌ خطأ في PDF: {e}")
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=f"❌ حصل خطأ في إنشاء PDF: {e}",
+                reply_markup=back_keyboard()
+            )
+
 
 # ====================================================
 # دالة مساعدة لمعالجة المدرسين
@@ -1276,159 +1428,6 @@ async def handle_text(update: Update, context) -> None:
             await context.bot.send_message(chat_id=update.message.chat_id, text="📄 تقرير PDF:", reply_markup=kb)
         else:
             await wait_msg.edit_text(response, reply_markup=kb)
-
-    # ====== PDF تقرير مدرس مرتب بالسنة ======
-    elif data == "teacher_pdf":
-        results = context.user_data.get("teacher_search_results", {})
-        query_text = context.user_data.get("teacher_search_query", "مدرس")
-        if not results:
-            await query.answer("مفيش بيانات، ابحثي عن المدرس أول", show_alert=True)
-            return
-
-        await query.edit_message_text("⏳ جاري إنشاء PDF...")
-
-        import os, tempfile
-        try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
-            from reportlab.lib.styles import ParagraphStyle
-            from reportlab.lib import colors
-            from reportlab.lib.units import cm
-            from reportlab.pdfbase import pdfmetrics
-            from reportlab.pdfbase.ttfonts import TTFont
-            import arabic_reshaper
-            from bidi.algorithm import get_display
-
-            def ar(t): return get_display(arabic_reshaper.reshape(str(t)))
-
-            font_path = "Amiri-Regular.ttf"
-            if os.path.exists(font_path):
-                pdfmetrics.registerFont(TTFont("Amiri", font_path))
-                fn = "Amiri"
-            else:
-                fn = "Helvetica"
-
-            pdf_path = tempfile.mktemp(suffix=".pdf")
-            doc = SimpleDocTemplate(pdf_path, pagesize=A4,
-                                    rightMargin=1.5*cm, leftMargin=1.5*cm,
-                                    topMargin=2*cm, bottomMargin=2*cm)
-            story = []
-            t1 = ParagraphStyle("t1", fontName=fn, fontSize=16, alignment=1, spaceAfter=8)
-            t2 = ParagraphStyle("t2", fontName=fn, fontSize=13, alignment=1, spaceAfter=6)
-            t3 = ParagraphStyle("t3", fontName=fn, fontSize=11, alignment=1, spaceAfter=4)
-            t4 = ParagraphStyle("t4", fontName=fn, fontSize=10, alignment=1, spaceAfter=3)
-
-            def make_table(rows_data, col_w):
-                hdrs = rows_data[0]
-                t = Table(rows_data, colWidths=col_w, repeatRows=1)
-                t.setStyle(TableStyle([
-                    ("BACKGROUND",     (0,0),(-1,0),  colors.HexColor("#2c3e50")),
-                    ("TEXTCOLOR",      (0,0),(-1,0),  colors.white),
-                    ("FONTNAME",       (0,0),(-1,-1), fn),
-                    ("FONTSIZE",       (0,0),(-1,0),  9),
-                    ("FONTSIZE",       (0,1),(-1,-1), 8),
-                    ("ALIGN",          (0,0),(-1,-1), "CENTER"),
-                    ("VALIGN",         (0,0),(-1,-1), "MIDDLE"),
-                    ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, colors.HexColor("#f2f2f2")]),
-                    ("GRID",           (0,0),(-1,-1), 0.4, colors.grey),
-                    ("TOPPADDING",     (0,0),(-1,-1), 3),
-                    ("BOTTOMPADDING",  (0,0),(-1,-1), 3),
-                ]))
-                return t
-
-            col_w = [0.7*cm, 3.2*cm, 1.6*cm, 2.3*cm, 2.3*cm, 1.8*cm, 2*cm, 1.8*cm]
-            hdrs  = [ar(h) for h in ["#","الاسم","الكود","التليفون","ولي الأمر","المنطقة","التخصص","المادة"]]
-
-            first_teacher = True
-            for teacher, data_val in results.items():
-                if not first_teacher:
-                    story.append(PageBreak())
-                first_teacher = False
-
-                if isinstance(data_val, dict) and "طلاب" in data_val:
-                    students = data_val["طلاب"]
-                    by_year  = data_val.get("بالسنة", {})
-                    by_spec  = data_val.get("بالتخصص", {})
-                else:
-                    students = data_val
-                    by_year  = {}
-                    by_spec  = {}
-
-                story.append(Paragraph(ar(f"تقرير طلاب: {teacher}"), t1))
-                story.append(Paragraph(ar(f"إجمالي الطلاب: {len(students)}"), t2))
-                if by_year:
-                    story.append(Paragraph(ar(
-                        f"ث1: {by_year.get('ث1',0)}  |  ث2: {by_year.get('ث2',0)}  |  ث3: {by_year.get('ث3',0)}"
-                    ), t3))
-                if by_spec:
-                    story.append(Paragraph(ar(
-                        f"عام: {by_spec.get('عام',0)}  |  أزهر: {by_spec.get('أزهر',0)}  |  بكالوريا: {by_spec.get('بكالوريا',0)}"
-                    ), t3))
-                story.append(Spacer(1, 0.4*cm))
-
-                # نرتب الطلاب بالسنة
-                for year_label in ["ث1", "ث2", "ث3"]:
-                    year_students = [s for s in students if s.get("السنة","") == year_label]
-                    if not year_students:
-                        continue
-
-                    # إحصائيات السنة دي
-                    sp_count = {"عام": 0, "أزهر": 0, "بكالوريا": 0}
-                    for s in year_students:
-                        sp = s.get("التخصص","")
-                        if "بكالوريا" in sp: sp_count["بكالوريا"] += 1
-                        elif sp == "أزهر":   sp_count["أزهر"] += 1
-                        elif sp == "عام":    sp_count["عام"] += 1
-
-                    story.append(Paragraph(ar(f"━━ سنة {year_label} ━━"), t2))
-                    story.append(Paragraph(ar(
-                        f"عدد الطلاب: {len(year_students)}  |  "
-                        f"عام: {sp_count['عام']}  |  "
-                        f"أزهر: {sp_count['أزهر']}  |  "
-                        f"بكالوريا: {sp_count['بكالوريا']}"
-                    ), t4))
-                    story.append(Spacer(1, 0.2*cm))
-
-                    rows = [hdrs]
-                    for i, s in enumerate(year_students, 1):
-                        rows.append([
-                            ar(i),
-                            ar(s.get("اسم","")),
-                            ar(s.get("كود","")),
-                            ar(s.get("التليفون","")),
-                            ar(s.get("ولي_الامر","")),
-                            ar(s.get("المنطقة","")),
-                            ar(s.get("التخصص","")),
-                            ar(s.get("المادة","")),
-                        ])
-                    story.append(make_table(rows, col_w))
-                    story.append(Spacer(1, 0.5*cm))
-
-            doc.build(story)
-            with open(pdf_path, "rb") as fp:
-                await context.bot.send_document(
-                    chat_id=query.message.chat_id,
-                    document=fp,
-                    filename=f"تقرير_{query_text}.pdf",
-                    caption=f"📄 تقرير طلاب: {query_text}"
-                )
-            os.remove(pdf_path)
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="✅ تم إرسال PDF",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-                    [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
-                ])
-            )
-        except Exception as e:
-            print(f"❌ خطأ في PDF: {e}")
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=f"❌ حصل خطأ في إنشاء PDF: {e}",
-                reply_markup=back_keyboard()
-            )
-
 
     # ====== تسجيل مجموعة ======
     elif state == BULK_INPUT:
