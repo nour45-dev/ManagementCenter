@@ -19,12 +19,15 @@ from keyboards import (
     student_actions_keyboard, smart_edit_keyboard,
     edit_fields_keyboard, image_actions_keyboard,
     report_type_keyboard, report_content_keyboard,
-    confirm_delete_keyboard, back_keyboard, teachers_keyboard
+    confirm_delete_keyboard, back_keyboard, teachers_keyboard,
+    attendance_menu_keyboard, att_subjects_keyboard, att_sessions_keyboard,
+    att_present_absent_keyboard, att_exam_keyboard, att_done_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
 from google import genai
 from google.genai import types
+import attendance
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,6 +55,10 @@ DELETE_CODE        = "DELETE_CODE"
 BULK_INPUT         = "BULK_INPUT"
 MULTI_PHOTO        = "MULTI_PHOTO"
 SEARCH_TEACHER     = "SEARCH_TEACHER"      # البحث عن مدرس بالاسم
+ATT_SEARCH         = "ATT_SEARCH"          # بحث عن طالب لتسجيل حضور/درجة/تقرير
+ATT_TEACHER_NAME   = "ATT_TEACHER_NAME"    # طلب اسم المدرس لو المادة لسه فاضية
+ATT_GRADE_SCORE    = "ATT_GRADE_SCORE"     # الطالب جاب كام
+ATT_GRADE_MAX      = "ATT_GRADE_MAX"       # الدرجة من كام
 
 temp_data  = {}
 user_state = {}
@@ -176,6 +183,107 @@ def build_teachers_text(teachers: dict) -> str:
     if not teachers:
         return ""
     return " | ".join([f"{subj}/{teacher}" for subj, teacher in teachers.items() if teacher])
+
+
+def _att_report_text(student: dict, year: str, report: dict) -> str:
+    text = (
+        f"📄 تقرير حضور ودرجات\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"👤 {student.get('الاسم','')} | 🔑 {student.get('الكود','')} | 📚 {year}\n"
+        f"✅ إجمالي مرات الحضور: {report['total_present']}\n"
+        f"❌ إجمالي مرات الغياب: {report['total_absent']}\n"
+    )
+    if report["overall_percentage"] is not None:
+        text += (
+            f"🎯 نسبة الدرجات: {report['overall_percentage']:.1f}% "
+            f"({report['overall_taqdeer']})\n"
+        )
+    text += "━━━━━━━━━━━━━━━━\n"
+
+    if not report["subjects"]:
+        text += "مفيش أي بيانات حضور أو درجات مسجلة للطالب ده لسه.\n"
+        return text
+
+    for s in report["subjects"]:
+        text += f"\n📖 {s['subject']}"
+        if s["teacher"]:
+            text += f" — المدرس: {s['teacher']}"
+        text += f"\n   ✅ حضر: {s['present']} | ❌ غاب: {s['absent']}\n"
+        if s["grades"]:
+            grades_str = "، ".join([f"حصة {sess}: {sc:g}/{mx:g}" for sess, sc, mx in s["grades"]])
+            text += f"   📝 الدرجات: {grades_str}\n"
+    return text
+
+
+async def _att_after_student_found(update, context, uid, student: dict, from_callback: bool):
+    """بعد ما نلاقي الطالب (بالكود أو بالاسم)، بنحدد سنته وبنكمل حسب الوضع (حضور/درجة/تقرير)"""
+    year = student.get("السنة الدراسية", "")
+    code = student.get("الكود", "")
+    name = student.get("الاسم", "")
+
+    if year not in attendance.YEAR_SHEET_IDS:
+        text = f"❌ سنة الطالب ({year}) مش معروفة، مقدرش أفتح شيت الحضور بتاعها."
+        if from_callback:
+            await update.callback_query.edit_message_text(text, reply_markup=back_keyboard())
+        else:
+            await update.message.reply_text(text, reply_markup=back_keyboard())
+        return
+
+    row = attendance.find_row_by_code(year, code)
+    if row is None:
+        text = f"❌ الطالب {name} (كود {code}) مش مسجل في شيت حضور {year}."
+        if from_callback:
+            await update.callback_query.edit_message_text(text, reply_markup=back_keyboard())
+        else:
+            await update.message.reply_text(text, reply_markup=back_keyboard())
+        return
+
+    context.user_data["att_student"] = {"code": code, "name": name, "year": year, "row": row}
+    mode = context.user_data.get("att_mode")
+    user_state.pop(uid, None)
+
+    if mode == "report":
+        if from_callback:
+            send_func = update.callback_query.edit_message_text
+        else:
+            send_func = update.message.reply_text
+        await _att_send_student_report(send_func, student, year)
+        return
+
+    subjects = attendance.get_subjects_for_year(year)
+    if not subjects:
+        text = "❌ حصل خطأ في قراءة المواد من الشيت"
+        if from_callback:
+            await update.callback_query.edit_message_text(text, reply_markup=back_keyboard())
+        else:
+            await update.message.reply_text(text, reply_markup=back_keyboard())
+        return
+
+    text = f"👤 {name} ({year})\n\nاختاري المادة:"
+    kb = att_subjects_keyboard(subjects)
+    if from_callback:
+        await update.callback_query.edit_message_text(text, reply_markup=kb)
+    else:
+        await update.message.reply_text(text, reply_markup=kb)
+
+
+async def _att_send_student_report(send_func, student: dict, year: str):
+    row = attendance.find_row_by_code(year, student.get("الكود", ""))
+    if row is None:
+        await send_func(
+            f"❌ الطالب {student.get('الاسم','')} مش مسجل في شيت حضور {year} لسه.",
+            reply_markup=back_keyboard()
+        )
+        return
+    report = attendance.build_report(year, row)
+    text = _att_report_text(student, year, report)
+    if len(text) > 4000:
+        chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+        for i, chunk in enumerate(chunks):
+            kb = back_keyboard() if i == len(chunks) - 1 else None
+            await send_func(chunk, reply_markup=kb)
+    else:
+        await send_func(text, reply_markup=back_keyboard())
 
 
 # ====================================================
@@ -676,6 +784,123 @@ async def handle_callback(update: Update, context) -> None:
         await query.edit_message_text(
             "🔍 بحث عن مدرس\n\n✍️ اكتبي اسم المدرس أو جزء منه:",
             reply_markup=back_keyboard()
+        )
+
+    # ====== قائمة الحضور والغياب والدرجات ======
+    elif data == "att_menu":
+        context.user_data.pop("att_mode", None)
+        context.user_data.pop("att_student", None)
+        context.user_data.pop("att_subject", None)
+        context.user_data.pop("att_session", None)
+        await query.edit_message_text(
+            "📅 الحضور والغياب والدرجات\n\nإيه اللي عايزاه؟",
+            reply_markup=attendance_menu_keyboard()
+        )
+
+    elif data in ("att_start_attendance", "att_start_grade", "att_start_report"):
+        mode = {"att_start_attendance": "attendance", "att_start_grade": "grade", "att_start_report": "report"}[data]
+        context.user_data["att_mode"] = mode
+        user_state[uid] = ATT_SEARCH
+        await query.edit_message_text(
+            "🔍 اكتبي اسم الطالب أو الكود بتاعه:",
+            reply_markup=back_keyboard()
+        )
+
+    # ====== اختيار طالب من نتائج بحث الحضور ======
+    elif data.startswith("att_pick_"):
+        code = data.replace("att_pick_", "")
+        student = search_by_code(code)
+        if not student:
+            await query.edit_message_text("❌ الطالب مش موجود", reply_markup=back_keyboard())
+            return
+        await _att_after_student_found(update, context, uid, student, from_callback=True)
+
+    # ====== اختيار المادة ======
+    elif data.startswith("att_subj_"):
+        subject = data[len("att_subj_"):]
+        student = context.user_data.get("att_student", {})
+        year = student.get("year")
+        row = student.get("row")
+        context.user_data["att_subject"] = subject
+
+        teacher = attendance.get_teacher(year, row, subject)
+        if not teacher:
+            user_state[uid] = ATT_TEACHER_NAME
+            await query.edit_message_text(
+                f"المادة دي ({subject}) لسه مفيهاش مدرس مسجل لـ {student.get('name','')}.\n"
+                f"✍️ اكتبي اسم المدرس:",
+                reply_markup=back_keyboard()
+            )
+            return
+
+        mode = context.user_data.get("att_mode")
+        if mode == "grade":
+            user_state[uid] = ATT_GRADE_SCORE
+            await query.edit_message_text(
+                f"📖 {subject} — أي حصة؟ اختاري رقمها الأول 👇\nهبعتلك تسأل عن الدرجة بعد اختيار الحصة.",
+                reply_markup=att_sessions_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"📖 {subject} — اختاري رقم الحصة:",
+                reply_markup=att_sessions_keyboard()
+            )
+
+    # ====== اختيار الحصة ======
+    elif data.startswith("att_sess_"):
+        session = int(data.replace("att_sess_", ""))
+        context.user_data["att_session"] = session
+        mode = context.user_data.get("att_mode")
+        subject = context.user_data.get("att_subject")
+        if mode == "grade":
+            user_state[uid] = ATT_GRADE_SCORE
+            await query.edit_message_text(f"📝 {subject} - حصة {session}\n\n✍️ الطالب جاب كام؟")
+        else:
+            await query.edit_message_text(
+                f"📖 {subject} - حصة {session}\n\nحاضر ولا غايب؟",
+                reply_markup=att_present_absent_keyboard()
+            )
+
+    elif data == "att_absent":
+        student = context.user_data.get("att_student", {})
+        subject = context.user_data.get("att_subject")
+        session = context.user_data.get("att_session")
+        attendance.mark_session(student.get("year"), student.get("row"), subject, session, "غ")
+        await query.edit_message_text(
+            f"✅ اتسجل: {student.get('name','')} غايب في {subject} - حصة {session}",
+            reply_markup=att_done_keyboard()
+        )
+
+    elif data == "att_present":
+        await query.edit_message_text(
+            "فيه امتحان الحصة دي؟",
+            reply_markup=att_exam_keyboard()
+        )
+
+    elif data == "att_exam_no":
+        student = context.user_data.get("att_student", {})
+        subject = context.user_data.get("att_subject")
+        session = context.user_data.get("att_session")
+        attendance.mark_session(student.get("year"), student.get("row"), subject, session, "✓")
+        await query.edit_message_text(
+            f"✅ اتسجل: {student.get('name','')} حاضر في {subject} - حصة {session}",
+            reply_markup=att_done_keyboard()
+        )
+
+    elif data == "att_exam_yes":
+        user_state[uid] = ATT_GRADE_SCORE
+        await query.edit_message_text("✍️ الطالب جاب كام؟")
+
+    elif data == "att_again":
+        student = context.user_data.get("att_student", {})
+        year = student.get("year")
+        subjects = attendance.get_subjects_for_year(year) if year else []
+        if not subjects:
+            await query.edit_message_text("❌ حصل خطأ في قراءة المواد", reply_markup=back_keyboard())
+            return
+        await query.edit_message_text(
+            f"👤 {student.get('name','')}\n\nاختاري المادة:",
+            reply_markup=att_subjects_keyboard(subjects)
         )
 
     # ====== تعديل كل البيانات بعرض الحالية والضغط ======
@@ -1445,6 +1670,80 @@ async def handle_text(update: Update, context) -> None:
             await context.bot.send_message(chat_id=update.message.chat_id, text="📄 تقرير PDF:", reply_markup=kb)
         else:
             await wait_msg.edit_text(response, reply_markup=kb)
+
+    # ====== بحث عن طالب لتسجيل حضور/درجة/تقرير ======
+    elif state == ATT_SEARCH:
+        student = search_by_code(text)
+        if student:
+            await _att_after_student_found(update, context, uid, student, from_callback=False)
+            return
+
+        results = search_by_name(text)
+        if not results:
+            await update.message.reply_text(f"❌ مفيش طالب بالاسم أو الكود '{text}'", reply_markup=back_keyboard())
+            return
+        if len(results) == 1:
+            await _att_after_student_found(update, context, uid, results[0], from_callback=False)
+            return
+
+        keyboard = []
+        for s in results[:10]:
+            keyboard.append([InlineKeyboardButton(
+                f"👤 {s.get('الاسم', '')} | {s.get('السنة الدراسية', '')} | كود: {s.get('الكود', '')}",
+                callback_data=f"att_pick_{s.get('الكود', '')}"
+            )])
+        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
+        await update.message.reply_text(
+            f"🔍 لقيت {len(results)} طالب بالاسم '{text}'\nاختاري:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # ====== اسم مدرس مادة لسه مسجلش لها مدرس ======
+    elif state == ATT_TEACHER_NAME:
+        student = context.user_data.get("att_student", {})
+        subject = context.user_data.get("att_subject")
+        attendance.set_teacher_if_empty(student.get("year"), student.get("row"), subject, text)
+        user_state.pop(uid, None)
+
+        mode = context.user_data.get("att_mode")
+        if mode == "grade":
+            user_state[uid] = ATT_GRADE_SCORE
+            await update.message.reply_text(
+                f"✅ تسجل المدرس: {text}\n\n📖 {subject} - أي حصة؟ اختاري رقمها 👇",
+                reply_markup=att_sessions_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ تسجل المدرس: {text}\n\n📖 {subject} - اختاري رقم الحصة:",
+                reply_markup=att_sessions_keyboard()
+            )
+
+    # ====== الطالب جاب كام في الامتحان ======
+    elif state == ATT_GRADE_SCORE:
+        if context.user_data.get("att_session") is None:
+            # لسه محددناش رقم الحصة (جاي من مسار "تسجيل درجة" مباشرة) - المتوقع إن الرقم اتبعت كزرار قبل كده
+            await update.message.reply_text("اختاري رقم الحصة الأول من الأزرار فوق.")
+            return
+        context.user_data["att_score"] = text.strip()
+        user_state[uid] = ATT_GRADE_MAX
+        await update.message.reply_text("✍️ الدرجة النهائية للامتحان (من كام)؟")
+
+    elif state == ATT_GRADE_MAX:
+        score = context.user_data.get("att_score", "")
+        max_score = text.strip()
+        student = context.user_data.get("att_student", {})
+        subject = context.user_data.get("att_subject")
+        session = context.user_data.get("att_session")
+        user_state.pop(uid, None)
+
+        ok = attendance.mark_session(student.get("year"), student.get("row"), subject, session, f"{score}/{max_score}")
+        if ok:
+            await update.message.reply_text(
+                f"✅ اتسجلت الدرجة: {student.get('name','')} - {subject} - حصة {session}: {score}/{max_score}",
+                reply_markup=att_done_keyboard()
+            )
+        else:
+            await update.message.reply_text("❌ حصل خطأ في تسجيل الدرجة", reply_markup=back_keyboard())
 
     # ====== تسجيل مجموعة ======
     elif state == BULK_INPUT:
