@@ -11,7 +11,8 @@ from config import BOT_TOKEN, ADMIN_ID, SUBJECTS, TEACHERS
 from sheets import (
     setup_sheet, add_student, search_by_code, search_by_name,
     get_students_by_year, update_student, delete_student,
-    get_statistics_updated, get_last_code_per_year, get_teacher_stats
+    get_statistics_updated, get_last_code_per_year, get_teacher_stats,
+    _parse_entries as parse_teacher_entries
 )
 from keyboards import (
     main_menu_keyboard, year_keyboard, subjects_keyboard,
@@ -239,6 +240,7 @@ async def _att_after_student_found(update, context, uid, student: dict, from_cal
         return
 
     context.user_data["att_student"] = {"code": code, "name": name, "year": year, "row": row}
+    context.user_data["att_student_full"] = student
     mode = context.user_data.get("att_mode")
     user_state.pop(uid, None)
 
@@ -824,10 +826,29 @@ async def handle_callback(update: Update, context) -> None:
         context.user_data["att_subject"] = subject
 
         teacher = attendance.get_teacher(year, row, subject)
+        auto_filled = ""
+        if not teacher:
+            # جرب نجيب اسم المدرس من بيانات الطالب الأساسية (حقل "المدرسين") لو موجود هناك
+            main_student = context.user_data.get("att_student_full", {})
+            main_teachers_str = str(main_student.get("المدرسين", ""))
+            for subj, tchr in parse_teacher_entries(main_teachers_str):
+                if subj.strip() == subject.strip() and tchr.strip():
+                    teacher = tchr.strip()
+                    break
+            if teacher:
+                if attendance.set_teacher_if_empty(year, row, subject, teacher):
+                    auto_filled = f"✅ اتسجل المدرس أوتوماتيك: {teacher}\n\n"
+                else:
+                    await query.edit_message_text(
+                        f"❌ حصل خطأ في الحفظ في شيت {year}. تأكدي إن صلاحيات الشيت مظبوطة.",
+                        reply_markup=back_keyboard()
+                    )
+                    return
+
         if not teacher:
             user_state[uid] = ATT_TEACHER_NAME
             await query.edit_message_text(
-                f"المادة دي ({subject}) لسه مفيهاش مدرس مسجل لـ {student.get('name','')}.\n"
+                f"المادة دي ({subject}) لسه مفيهاش مدرس مسجل لـ {student.get('name','')} في شيت {year}.\n"
                 f"✍️ اكتبي اسم المدرس:",
                 reply_markup=back_keyboard()
             )
@@ -835,14 +856,13 @@ async def handle_callback(update: Update, context) -> None:
 
         mode = context.user_data.get("att_mode")
         if mode == "grade":
-            user_state[uid] = ATT_GRADE_SCORE
             await query.edit_message_text(
-                f"📖 {subject} — أي حصة؟ اختاري رقمها الأول 👇\nهبعتلك تسأل عن الدرجة بعد اختيار الحصة.",
+                f"{auto_filled}📖 {subject} ({teacher}) — شيت {year}\n\nأي حصة؟",
                 reply_markup=att_sessions_keyboard()
             )
         else:
             await query.edit_message_text(
-                f"📖 {subject} — اختاري رقم الحصة:",
+                f"{auto_filled}📖 {subject} ({teacher}) — شيت {year}\n\nاختاري رقم الحصة:",
                 reply_markup=att_sessions_keyboard()
             )
 
@@ -865,11 +885,18 @@ async def handle_callback(update: Update, context) -> None:
         student = context.user_data.get("att_student", {})
         subject = context.user_data.get("att_subject")
         session = context.user_data.get("att_session")
-        attendance.mark_session(student.get("year"), student.get("row"), subject, session, "غ")
-        await query.edit_message_text(
-            f"✅ اتسجل: {student.get('name','')} غايب في {subject} - حصة {session}",
-            reply_markup=att_done_keyboard()
-        )
+        year = student.get("year")
+        ok = attendance.mark_session(year, student.get("row"), subject, session, "غ")
+        if ok:
+            await query.edit_message_text(
+                f"✅ اتسجل: {student.get('name','')} غايب في {subject} - حصة {session}\n📁 شيت {year}",
+                reply_markup=att_done_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ حصل خطأ في الحفظ في شيت {year}. تأكدي إن صلاحيات الشيت مظبوطة.",
+                reply_markup=back_keyboard()
+            )
 
     elif data == "att_present":
         await query.edit_message_text(
@@ -881,11 +908,18 @@ async def handle_callback(update: Update, context) -> None:
         student = context.user_data.get("att_student", {})
         subject = context.user_data.get("att_subject")
         session = context.user_data.get("att_session")
-        attendance.mark_session(student.get("year"), student.get("row"), subject, session, "✓")
-        await query.edit_message_text(
-            f"✅ اتسجل: {student.get('name','')} حاضر في {subject} - حصة {session}",
-            reply_markup=att_done_keyboard()
-        )
+        year = student.get("year")
+        ok = attendance.mark_session(year, student.get("row"), subject, session, "✓")
+        if ok:
+            await query.edit_message_text(
+                f"✅ اتسجل: {student.get('name','')} حاضر في {subject} - حصة {session}\n📁 شيت {year}",
+                reply_markup=att_done_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ حصل خطأ في الحفظ في شيت {year}. تأكدي إن صلاحيات الشيت مظبوطة.",
+                reply_markup=back_keyboard()
+            )
 
     elif data == "att_exam_yes":
         user_state[uid] = ATT_GRADE_SCORE
@@ -1702,19 +1736,26 @@ async def handle_text(update: Update, context) -> None:
     elif state == ATT_TEACHER_NAME:
         student = context.user_data.get("att_student", {})
         subject = context.user_data.get("att_subject")
-        attendance.set_teacher_if_empty(student.get("year"), student.get("row"), subject, text)
+        year = student.get("year")
+        ok = attendance.set_teacher_if_empty(year, student.get("row"), subject, text)
         user_state.pop(uid, None)
+
+        if not ok:
+            await update.message.reply_text(
+                f"❌ حصل خطأ في الحفظ في شيت {year}. تأكدي إن صلاحيات الشيت مظبوطة.",
+                reply_markup=back_keyboard()
+            )
+            return
 
         mode = context.user_data.get("att_mode")
         if mode == "grade":
-            user_state[uid] = ATT_GRADE_SCORE
             await update.message.reply_text(
-                f"✅ تسجل المدرس: {text}\n\n📖 {subject} - أي حصة؟ اختاري رقمها 👇",
+                f"✅ تسجل المدرس: {text} — شيت {year}\n\n📖 {subject} - أي حصة؟ اختاري رقمها 👇",
                 reply_markup=att_sessions_keyboard()
             )
         else:
             await update.message.reply_text(
-                f"✅ تسجل المدرس: {text}\n\n📖 {subject} - اختاري رقم الحصة:",
+                f"✅ تسجل المدرس: {text} — شيت {year}\n\n📖 {subject} - اختاري رقم الحصة:",
                 reply_markup=att_sessions_keyboard()
             )
 
@@ -1734,16 +1775,20 @@ async def handle_text(update: Update, context) -> None:
         student = context.user_data.get("att_student", {})
         subject = context.user_data.get("att_subject")
         session = context.user_data.get("att_session")
+        year = student.get("year")
         user_state.pop(uid, None)
 
-        ok = attendance.mark_session(student.get("year"), student.get("row"), subject, session, f"{score}/{max_score}")
+        ok = attendance.mark_session(year, student.get("row"), subject, session, f"{score}/{max_score}")
         if ok:
             await update.message.reply_text(
-                f"✅ اتسجلت الدرجة: {student.get('name','')} - {subject} - حصة {session}: {score}/{max_score}",
+                f"✅ اتسجلت الدرجة: {student.get('name','')} - {subject} - حصة {session}: {score}/{max_score}\n📁 شيت {year}",
                 reply_markup=att_done_keyboard()
             )
         else:
-            await update.message.reply_text("❌ حصل خطأ في تسجيل الدرجة", reply_markup=back_keyboard())
+            await update.message.reply_text(
+                f"❌ حصل خطأ في الحفظ في شيت {year}. تأكدي إن صلاحيات الشيت مظبوطة.",
+                reply_markup=back_keyboard()
+            )
 
     # ====== تسجيل مجموعة ======
     elif state == BULK_INPUT:
