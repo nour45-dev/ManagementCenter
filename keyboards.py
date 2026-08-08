@@ -24,9 +24,47 @@ def attendance_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("✅ تسجيل حضور وغياب", callback_data="att_start_attendance")],
         [InlineKeyboardButton("📝 تسجيل درجة", callback_data="att_start_grade")],
+        [InlineKeyboardButton("👥 تسجيل حضور مجموعة (نص أو صورة)", callback_data="att_bulk_start")],
         [InlineKeyboardButton("📄 تقرير حضور ودرجات طالب", callback_data="att_start_report")],
         [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
     ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def attbulk_year_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("1️⃣ ث1", callback_data="attbulk_year_ث1"),
+            InlineKeyboardButton("2️⃣ ث2", callback_data="attbulk_year_ث2"),
+            InlineKeyboardButton("3️⃣ ث3", callback_data="attbulk_year_ث3"),
+        ],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def attbulk_subjects_keyboard(subjects: list):
+    keyboard = []
+    for i in range(0, len(subjects), 2):
+        row = []
+        for s in subjects[i:i+2]:
+            row.append(InlineKeyboardButton(s, callback_data=f"attbulk_subj_{s}"))
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def attbulk_sessions_keyboard():
+    keyboard = []
+    row = []
+    for n in range(1, 9):
+        row.append(InlineKeyboardButton(str(n), callback_data=f"attbulk_sess_{n}"))
+        if len(row) == 4:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")])
     return InlineKeyboardMarkup(keyboard)
 
 
