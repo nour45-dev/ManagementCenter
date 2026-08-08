@@ -22,7 +22,8 @@ from keyboards import (
     report_type_keyboard, report_content_keyboard,
     confirm_delete_keyboard, back_keyboard, teachers_keyboard,
     attendance_menu_keyboard, att_subjects_keyboard, att_sessions_keyboard,
-    att_present_absent_keyboard, att_exam_keyboard, att_done_keyboard
+    att_present_absent_keyboard, att_exam_keyboard, att_done_keyboard,
+    attbulk_year_keyboard, attbulk_subjects_keyboard, attbulk_sessions_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
@@ -60,6 +61,7 @@ ATT_SEARCH         = "ATT_SEARCH"          # بحث عن طالب لتسجيل �
 ATT_TEACHER_NAME   = "ATT_TEACHER_NAME"    # طلب اسم المدرس لو المادة لسه فاضية
 ATT_GRADE_SCORE    = "ATT_GRADE_SCORE"     # الطالب جاب كام
 ATT_GRADE_MAX      = "ATT_GRADE_MAX"       # الدرجة من كام
+BULK_ATT_INPUT     = "BULK_ATT_INPUT"      # مستني قائمة نصية أو صورة لتسجيل حضور مجموعة
 
 temp_data  = {}
 user_state = {}
@@ -288,6 +290,100 @@ async def _att_send_student_report(send_func, student: dict, year: str):
         await send_func(text, reply_markup=back_keyboard())
 
 
+async def analyze_attendance_image(image_bytes: bytes) -> list:
+    """بتقرأ صورة كشف حضور وغياب وترجع list: [{"معرف": "اسم أو كود", "الحالة": "حاضر/غايب", "الدرجة": "8/10" أو ""}]"""
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                """دي صورة كشف حضور وغياب طلاب (ممكن يكون فيه درجات امتحان جنبها).
+استخرج كل طالب في الصورة وارجع JSON array فقط بالشكل ده بالظبط، من غير أي نص تاني:
+[
+  {"معرف": "اسم الطالب أو كوده زي ما هو مكتوب", "الحالة": "حاضر أو غايب", "الدرجة": "8/10 أو فاضي لو مفيش امتحان"}
+]""",
+            ],
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        )
+        text = (response.text or "").strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(text)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.error(f"analyze_attendance_image: {e}")
+        return []
+
+
+def _parse_bulk_att_line(line: str):
+    """من سطر زي 'أحمد محمد: حاضر' أو 'كود - 8/10' يرجع (المعرف, الحالة) أو None"""
+    line = line.strip()
+    if not line:
+        return None
+    for sep in [":", "-", "="]:
+        if sep in line:
+            ident, status = line.split(sep, 1)
+            ident, status = ident.strip(), status.strip()
+            if ident and status:
+                return ident, status
+    return None
+
+
+def _apply_bulk_attendance(year: str, subject: str, session: int, entries: list):
+    """entries: [(معرف, حالة), ...]. بترجع (success_lines, fail_lines)"""
+    success, fail = [], []
+    for ident, status in entries:
+        ident = str(ident).strip()
+        status = str(status).strip()
+        if not ident or not status:
+            fail.append(f"سطر فاضي أو ناقص")
+            continue
+
+        row = None
+        display_name = ident
+        if ident.isdigit():
+            row = attendance.find_row_by_code(year, ident)
+        if row is None:
+            matches = attendance.find_rows_by_name(year, ident)
+            if len(matches) == 1:
+                row, display_name = matches[0]
+            elif len(matches) > 1:
+                fail.append(f"{ident} (أكتر من طالب بنفس الاسم، اكتبيه بالكود)")
+                continue
+
+        if row is None:
+            fail.append(f"{ident} (مش موجود في شيت {year})")
+            continue
+
+        if "/" in status:
+            value = status
+        elif "حاضر" in status or "حضر" in status or status.lower() in ("present", "p"):
+            value = "✓"
+        elif "غياب" in status or "غايب" in status or status.strip() == "غ" or status.lower() in ("absent", "a"):
+            value = "غ"
+        else:
+            fail.append(f"{ident} (حالة مش مفهومة: {status})")
+            continue
+
+        ok = attendance.mark_session(year, row, subject, session, value)
+        if ok:
+            success.append(f"{display_name}: {value}")
+        else:
+            fail.append(f"{ident} (فشل الحفظ في الشيت)")
+
+    return success, fail
+
+
+def _bulk_result_text(year, subject, session, success, fail) -> str:
+    text = f"📋 نتيجة تسجيل حضور مجموعة\n📖 {subject} - حصة {session} - شيت {year}\n━━━━━━━━━━━━━━━━\n"
+    if success:
+        text += f"✅ اتسجل ({len(success)}):\n" + "\n".join(f"  • {s}" for s in success) + "\n"
+    if fail:
+        text += f"\n❌ فشل ({len(fail)}):\n" + "\n".join(f"  • {s}" for s in fail) + "\n"
+    if not success and not fail:
+        text += "مفيش أي بيانات اتعرفت من اللي بعتيه."
+    return text
+
+
 # ====================================================
 # التعامل مع الصور
 # ====================================================
@@ -295,6 +391,41 @@ async def handle_photo(update: Update, context) -> None:
     if not is_admin(update):
         return
     uid = update.effective_user.id
+
+    # صورة كشف حضور مجموعة
+    if user_state.get(uid) == BULK_ATT_INPUT:
+        year = context.user_data.get("attbulk_year")
+        subject = context.user_data.get("attbulk_subject")
+        session = context.user_data.get("attbulk_session")
+        if not (year and subject and session):
+            await update.message.reply_text("❌ حصل خطأ، ابدئي من تاني من قائمة تسجيل حضور مجموعة.", reply_markup=back_keyboard())
+            user_state.pop(uid, None)
+            return
+
+        wait_msg = await update.message.reply_text("📸 جاري قراءة كشف الحضور بـ Gemini...\n⏳ ثواني بس...")
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        image_bytes = await file.download_as_bytearray()
+        rows = await analyze_attendance_image(bytes(image_bytes))
+
+        if not rows:
+            await wait_msg.edit_text("❌ مقدرتش أقرأ حاجة من الصورة، جربي تكتبي القائمة نصًا بدل كده.", reply_markup=back_keyboard())
+            return
+
+        entries = [(r.get("معرف", ""), r.get("الدرجة") or r.get("الحالة", "")) for r in rows]
+        success, fail = _apply_bulk_attendance(year, subject, session, entries)
+        result_text = _bulk_result_text(year, subject, session, success, fail)
+        user_state.pop(uid, None)
+
+        if len(result_text) > 4000:
+            chunks = [result_text[i:i+4000] for i in range(0, len(result_text), 4000)]
+            await wait_msg.edit_text(chunks[0])
+            for chunk in chunks[1:]:
+                await context.bot.send_message(chat_id=update.message.chat_id, text=chunk)
+            await context.bot.send_message(chat_id=update.message.chat_id, text="✅ انتهى", reply_markup=main_menu_keyboard())
+        else:
+            await wait_msg.edit_text(result_text, reply_markup=main_menu_keyboard())
+        return
 
     # وضع الصور المتعددة
     if user_state.get(uid) == MULTI_PHOTO:
@@ -805,6 +936,52 @@ async def handle_callback(update: Update, context) -> None:
         user_state[uid] = ATT_SEARCH
         await query.edit_message_text(
             "🔍 اكتبي اسم الطالب أو الكود بتاعه:",
+            reply_markup=back_keyboard()
+        )
+
+    # ====== تسجيل حضور مجموعة (نص أو صورة) ======
+    elif data == "att_bulk_start":
+        context.user_data.pop("attbulk_year", None)
+        context.user_data.pop("attbulk_subject", None)
+        context.user_data.pop("attbulk_session", None)
+        await query.edit_message_text(
+            "👥 تسجيل حضور مجموعة\n\nإيه السنة الدراسية؟",
+            reply_markup=attbulk_year_keyboard()
+        )
+
+    elif data.startswith("attbulk_year_"):
+        year = data.replace("attbulk_year_", "")
+        context.user_data["attbulk_year"] = year
+        subjects = attendance.get_subjects_for_year(year)
+        if not subjects:
+            await query.edit_message_text(f"❌ حصل خطأ في قراءة مواد شيت {year}", reply_markup=back_keyboard())
+            return
+        await query.edit_message_text(
+            f"📚 شيت {year} — اختاري المادة:",
+            reply_markup=attbulk_subjects_keyboard(subjects)
+        )
+
+    elif data.startswith("attbulk_subj_"):
+        subject = data[len("attbulk_subj_"):]
+        context.user_data["attbulk_subject"] = subject
+        await query.edit_message_text(
+            f"📖 {subject} — اختاري رقم الحصة:",
+            reply_markup=attbulk_sessions_keyboard()
+        )
+
+    elif data.startswith("attbulk_sess_"):
+        session = int(data.replace("attbulk_sess_", ""))
+        context.user_data["attbulk_session"] = session
+        year = context.user_data.get("attbulk_year")
+        subject = context.user_data.get("attbulk_subject")
+        user_state[uid] = BULK_ATT_INPUT
+        await query.edit_message_text(
+            f"📖 {subject} - حصة {session} - شيت {year}\n\n"
+            f"ابعتي قائمة الطلاب، سطر لكل طالب بالشكل ده:\n"
+            f"الاسم أو الكود: حاضر\n"
+            f"الاسم أو الكود: غايب\n"
+            f"الاسم أو الكود: 8/10  (لو فيه درجة امتحان)\n\n"
+            f"أو ابعتي صورة كشف الحضور مباشرة وأنا هقراها.",
             reply_markup=back_keyboard()
         )
 
@@ -1789,6 +1966,43 @@ async def handle_text(update: Update, context) -> None:
                 f"❌ حصل خطأ في الحفظ في شيت {year}. تأكدي إن صلاحيات الشيت مظبوطة.",
                 reply_markup=back_keyboard()
             )
+
+    # ====== قائمة نصية لتسجيل حضور مجموعة ======
+    elif state == BULK_ATT_INPUT:
+        year = context.user_data.get("attbulk_year")
+        subject = context.user_data.get("attbulk_subject")
+        session = context.user_data.get("attbulk_session")
+        if not (year and subject and session):
+            await update.message.reply_text("❌ حصل خطأ، ابدئي من تاني من قائمة تسجيل حضور مجموعة.", reply_markup=back_keyboard())
+            user_state.pop(uid, None)
+            return
+
+        entries = []
+        for line in text.strip().split("\n"):
+            parsed = _parse_bulk_att_line(line)
+            if parsed:
+                entries.append(parsed)
+
+        if not entries:
+            await update.message.reply_text(
+                "❌ مقدرتش أفهم أي سطر. لازم كل سطر يكون بالشكل: الاسم أو الكود: حاضر/غايب/الدرجة",
+                reply_markup=back_keyboard()
+            )
+            return
+
+        wait_msg = await update.message.reply_text(f"⏳ جاري تسجيل {len(entries)} طالب...")
+        success, fail = _apply_bulk_attendance(year, subject, session, entries)
+        result_text = _bulk_result_text(year, subject, session, success, fail)
+        user_state.pop(uid, None)
+
+        if len(result_text) > 4000:
+            chunks = [result_text[i:i+4000] for i in range(0, len(result_text), 4000)]
+            await wait_msg.edit_text(chunks[0])
+            for chunk in chunks[1:]:
+                await context.bot.send_message(chat_id=update.message.chat_id, text=chunk)
+            await context.bot.send_message(chat_id=update.message.chat_id, text="✅ انتهى", reply_markup=main_menu_keyboard())
+        else:
+            await wait_msg.edit_text(result_text, reply_markup=main_menu_keyboard())
 
     # ====== تسجيل مجموعة ======
     elif state == BULK_INPUT:
