@@ -123,30 +123,45 @@ def get_teacher(year: str, row: int, subject: str) -> str:
     block = _find_subject_block(year, subject)
     if not block:
         return ""
-    ws = _get_worksheet(year)
-    return (ws.cell(row, block["teacher_col"]).value or "").strip()
+    try:
+        ws = _get_worksheet(year)
+        return (ws.cell(row, block["teacher_col"]).value or "").strip()
+    except Exception as e:
+        print(f"❌ خطأ في قراءة اسم المدرس ({year}/{subject}): {e}")
+        return ""
 
 
 def set_teacher_if_empty(year: str, row: int, subject: str, teacher_name: str) -> bool:
     block = _find_subject_block(year, subject)
     if not block:
+        print(f"❌ set_teacher_if_empty: مفيش عمود للمادة '{subject}' في شيت {year}")
         return False
-    ws = _get_worksheet(year)
-    current = (ws.cell(row, block["teacher_col"]).value or "").strip()
-    if not current:
-        ws.update_cell(row, block["teacher_col"], teacher_name)
-    return True
+    try:
+        ws = _get_worksheet(year)
+        current = (ws.cell(row, block["teacher_col"]).value or "").strip()
+        if not current:
+            ws.update_cell(row, block["teacher_col"], teacher_name)
+        return True
+    except Exception as e:
+        print(f"❌ خطأ في تسجيل اسم المدرس ({year}/{subject}): {e}")
+        return False
 
 
 def mark_session(year: str, row: int, subject: str, session: int, value: str) -> bool:
     """بتكتب قيمة (✓ / غ / 8/10) في عمود الحصة المطلوبة"""
     block = _find_subject_block(year, subject)
     if not block or session < 1 or session > len(block["session_cols"]):
+        print(f"❌ mark_session: مفيش عمود مطابق للمادة '{subject}' حصة {session} في شيت {year}")
         return False
-    ws = _get_worksheet(year)
-    col = block["session_cols"][session - 1]
-    ws.update_cell(row, col, value)
-    return True
+    try:
+        ws = _get_worksheet(year)
+        col = block["session_cols"][session - 1]
+        ws.update_cell(row, col, value)
+        return True
+    except Exception as e:
+        print(f"❌ خطأ في تسجيل بيانات الحصة ({year}/{subject}/حصة {session}): {e}")
+        return False
+
 
 
 def get_student_full_record(year: str, row: int) -> list:
