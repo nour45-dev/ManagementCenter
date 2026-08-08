@@ -119,6 +119,22 @@ def find_row_by_code(year: str, code: str):
         return None
 
 
+def find_rows_by_name(year: str, name: str):
+    """بترجع كل الصفوف اللي اسمها بيطابق (جزئيًا) في شيت السنة دي: [(row, الاسم_الكامل), ...]"""
+    try:
+        ws = _get_worksheet(year)
+        names = ws.col_values(1)
+        name_lower = name.strip().lower()
+        matches = []
+        for i, n in enumerate(names, 1):
+            if name_lower and name_lower in str(n).strip().lower():
+                matches.append((i, str(n).strip()))
+        return matches
+    except Exception as e:
+        print(f"❌ خطأ في البحث بالاسم في شيت {year}: {e}")
+        return []
+
+
 def get_teacher(year: str, row: int, subject: str) -> str:
     block = _find_subject_block(year, subject)
     if not block:
