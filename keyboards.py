@@ -15,6 +15,69 @@ def main_menu_keyboard():
         [InlineKeyboardButton("📈 إحصائيات", callback_data="stats"),
          InlineKeyboardButton("🔢 آخر الأكواد", callback_data="last_codes")],
         [InlineKeyboardButton("👨‍🏫 إحصائيات المدرسين", callback_data="teacher_stats")],
+        [InlineKeyboardButton("📅 حضور وغياب ودرجات", callback_data="att_menu")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def attendance_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("✅ تسجيل حضور وغياب", callback_data="att_start_attendance")],
+        [InlineKeyboardButton("📝 تسجيل درجة", callback_data="att_start_grade")],
+        [InlineKeyboardButton("📄 تقرير حضور ودرجات طالب", callback_data="att_start_report")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def att_subjects_keyboard(subjects: list):
+    keyboard = []
+    for i in range(0, len(subjects), 2):
+        row = []
+        for s in subjects[i:i+2]:
+            row.append(InlineKeyboardButton(s, callback_data=f"att_subj_{s}"))
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def att_sessions_keyboard():
+    keyboard = []
+    row = []
+    for n in range(1, 9):
+        row.append(InlineKeyboardButton(str(n), callback_data=f"att_sess_{n}"))
+        if len(row) == 4:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def att_present_absent_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("✅ حاضر", callback_data="att_present"),
+         InlineKeyboardButton("❌ غايب", callback_data="att_absent")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def att_exam_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("📝 آه، فيه امتحان", callback_data="att_exam_yes"),
+         InlineKeyboardButton("لأ، مفيش", callback_data="att_exam_no")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def att_done_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("➕ تسجيل حصة تانية لنفس الطالب", callback_data="att_again")],
+        [InlineKeyboardButton("🔍 طالب تاني", callback_data="att_menu")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
