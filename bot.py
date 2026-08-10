@@ -1830,6 +1830,20 @@ async def handle_text(update: Update, context) -> None:
         context.user_data["teacher_search_results"] = results
         context.user_data["teacher_search_query"]   = text
 
+        # لو مدرس واحد بالظبط اتلاقى - نملى شيت "كشف الحضور بالأسماء والأكواد" بيه
+        roster_note = ""
+        if len(results) == 1:
+            only_teacher = list(results.keys())[0]
+            only_data = results[only_teacher]
+            roster_students = only_data["طلاب"] if isinstance(only_data, dict) and "طلاب" in only_data else only_data
+            subjects_used = {s.get("المادة", "") for s in roster_students if s.get("المادة")}
+            subject_label = subjects_used.pop() if len(subjects_used) == 1 else ""
+            if attendance.write_teacher_roster(only_teacher, subject_label, roster_students):
+                roster_url = f"https://docs.google.com/spreadsheets/d/{attendance.ROSTER_SHEET_ID}/edit"
+                roster_note = f"\n📋 كشف الحضور بالأسماء والأكواد اتملى بطلاب {only_teacher} مرتبين أبجديًا:\n{roster_url}\n"
+            else:
+                roster_note = "\n⚠️ حصل خطأ في تعبئة كشف الحضور بالأسماء والأكواد.\n"
+
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
         for teacher, data_val in results.items():
@@ -1866,6 +1880,8 @@ async def handle_text(update: Update, context) -> None:
                     f"- {s.get('المادة', '')}\n"
                 )
             response += "━━━━━━━━━━━━━━━━\n"
+
+        response += roster_note
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📄 تحميل PDF بكل التفاصيل", callback_data="teacher_pdf")],
