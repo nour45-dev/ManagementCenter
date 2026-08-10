@@ -217,6 +217,48 @@ def get_taqdeer(percentage: float) -> str:
     return "ضعيف"
 
 
+# ====================================================
+# كشف الحضور بالأسماء والأكواد - شيت جاهز نملاه بطلاب مدرس معين
+# ====================================================
+ROSTER_SHEET_ID = os.environ.get("ROSTER_SHEET_ID", "1Brz9vi4MHRcAezwQfsQEEFneMSXtTU2MkqoeDP3EEsE")
+_roster_ws = None
+
+
+def _get_roster_worksheet():
+    global _roster_ws
+    if _roster_ws is not None:
+        return _roster_ws
+    client = _connect()
+    sh = client.open_by_key(ROSTER_SHEET_ID)
+    _roster_ws = sh.sheet1
+    return _roster_ws
+
+
+def write_teacher_roster(teacher_name: str, subject: str, students: list) -> bool:
+    """
+    بتملى شيت 'كشف الحضور بالأسماء والأكواد' بقائمة طلاب مدرس معين مرتبة أبجديًا بالاسم.
+    students: list of dicts فيها 'اسم' و 'كود' على الأقل.
+    """
+    try:
+        ws = _get_roster_worksheet()
+
+        max_rows = max(300, len(students) + 10)
+        ws.batch_clear([f"A4:M{max_rows + 3}"])
+
+        ws.update_cell(1, 2, subject or "")      # B1: قيمة اسم المادة
+        ws.update_cell(1, 5, teacher_name or "")  # E1: قيمة اسم المدرس
+
+        sorted_students = sorted(students, key=lambda s: str(s.get("اسم", "")))
+        rows = [[i, s.get("اسم", ""), str(s.get("كود", ""))] for i, s in enumerate(sorted_students, 1)]
+
+        if rows:
+            ws.update(range_name=f"A4:C{3 + len(rows)}", values=rows)
+        return True
+    except Exception as e:
+        print(f"❌ خطأ في كتابة كشف الحضور: {e}")
+        return False
+
+
 def build_report(year: str, row: int) -> dict:
     """
     بتبني تقرير شامل: لكل مادة (عدد الحضور / عدد الغياب / الدرجات)، وتقدير عام
