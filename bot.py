@@ -1479,6 +1479,31 @@ async def handle_callback(update: Update, context) -> None:
 
 
     # ====== PDF تقرير مدرس مرتب بالسنة ======
+    elif data == "att_make_roster":
+        results = context.user_data.get("teacher_search_results", {})
+        if not results or len(results) != 1:
+            await query.answer("مفيش نتيجة بحث عن مدرس واحد محفوظة، ابحثي تاني", show_alert=True)
+            return
+        teacher_name = list(results.keys())[0]
+        data_val = results[teacher_name]
+        roster_students = data_val["طلاب"] if isinstance(data_val, dict) and "طلاب" in data_val else data_val
+        subjects_used = {s.get("المادة", "") for s in roster_students if s.get("المادة")}
+        subject_label = subjects_used.pop() if len(subjects_used) == 1 else ""
+
+        await query.answer("⏳ جاري تجهيز الكشف...")
+        ok = attendance.write_teacher_roster(teacher_name, subject_label, roster_students)
+        if ok:
+            roster_url = f"https://docs.google.com/spreadsheets/d/{attendance.ROSTER_SHEET_ID}/edit"
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=f"📋 اتعمل كشف الحضور بطلاب {teacher_name} ({len(roster_students)} طالب) مرتبين أبجديًا:\n{roster_url}"
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="⚠️ حصل خطأ في تعبئة كشف الحضور. تأكدي إن صلاحيات الشيت مظبوطة."
+            )
+
     elif data == "teacher_pdf":
         results = context.user_data.get("teacher_search_results", {})
         query_text = context.user_data.get("teacher_search_query", "مدرس")
@@ -1826,23 +1851,9 @@ async def handle_text(update: Update, context) -> None:
             )
             return
 
-        # بنخزن النتايج عشان زرار PDF يقدر يستخدمها بعدين
+        # بنخزن النتايج عشان زرار PDF/الكشف يقدروا يستخدموها بعدين
         context.user_data["teacher_search_results"] = results
         context.user_data["teacher_search_query"]   = text
-
-        # لو مدرس واحد بالظبط اتلاقى - نملى شيت "كشف الحضور بالأسماء والأكواد" بيه
-        roster_note = ""
-        if len(results) == 1:
-            only_teacher = list(results.keys())[0]
-            only_data = results[only_teacher]
-            roster_students = only_data["طلاب"] if isinstance(only_data, dict) and "طلاب" in only_data else only_data
-            subjects_used = {s.get("المادة", "") for s in roster_students if s.get("المادة")}
-            subject_label = subjects_used.pop() if len(subjects_used) == 1 else ""
-            if attendance.write_teacher_roster(only_teacher, subject_label, roster_students):
-                roster_url = f"https://docs.google.com/spreadsheets/d/{attendance.ROSTER_SHEET_ID}/edit"
-                roster_note = f"\n📋 كشف الحضور بالأسماء والأكواد اتملى بطلاب {only_teacher} مرتبين أبجديًا:\n{roster_url}\n"
-            else:
-                roster_note = "\n⚠️ حصل خطأ في تعبئة كشف الحضور بالأسماء والأكواد.\n"
 
         # بنبني الرد لكل مدرس في النتيجة
         response = f"🔍 نتيجة البحث عن: '{text}'\n━━━━━━━━━━━━━━━━\n"
@@ -1881,13 +1892,12 @@ async def handle_text(update: Update, context) -> None:
                 )
             response += "━━━━━━━━━━━━━━━━\n"
 
-        response += roster_note
-
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📄 تحميل PDF بكل التفاصيل", callback_data="teacher_pdf")],
-            [InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")],
-            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")],
-        ])
+        kb_buttons = [[InlineKeyboardButton("📄 تحميل PDF بكل التفاصيل", callback_data="teacher_pdf")]]
+        if len(results) == 1:
+            kb_buttons.append([InlineKeyboardButton("📋 اعملي كشف حضور بالأسماء والأكواد", callback_data="att_make_roster")])
+        kb_buttons.append([InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")])
+        kb_buttons.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")])
+        kb = InlineKeyboardMarkup(kb_buttons)
 
         if len(response) > 4000:
             chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
