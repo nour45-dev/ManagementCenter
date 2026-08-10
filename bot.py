@@ -384,6 +384,25 @@ def _bulk_result_text(year, subject, session, success, fail) -> str:
     return text
 
 
+async def _att_make_roster_for_teacher(context, chat_id, teacher_name: str, data_val):
+    roster_students = data_val["طلاب"] if isinstance(data_val, dict) and "طلاب" in data_val else data_val
+    subjects_used = {s.get("المادة", "") for s in roster_students if s.get("المادة")}
+    subject_label = subjects_used.pop() if len(subjects_used) == 1 else ""
+
+    ok = attendance.write_teacher_roster(teacher_name, subject_label, roster_students)
+    if ok:
+        roster_url = f"https://docs.google.com/spreadsheets/d/{attendance.ROSTER_SHEET_ID}/edit"
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"📋 اتعمل كشف الحضور بطلاب {teacher_name} ({len(roster_students)} طالب) مرتبين أبجديًا:\n{roster_url}"
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ حصل خطأ في تعبئة كشف الحضور. تأكدي إن صلاحيات الشيت مظبوطة."
+        )
+
+
 # ====================================================
 # التعامل مع الصور
 # ====================================================
@@ -1485,24 +1504,34 @@ async def handle_callback(update: Update, context) -> None:
             await query.answer("مفيش نتيجة بحث عن مدرس واحد محفوظة، ابحثي تاني", show_alert=True)
             return
         teacher_name = list(results.keys())[0]
-        data_val = results[teacher_name]
-        roster_students = data_val["طلاب"] if isinstance(data_val, dict) and "طلاب" in data_val else data_val
-        subjects_used = {s.get("المادة", "") for s in roster_students if s.get("المادة")}
-        subject_label = subjects_used.pop() if len(subjects_used) == 1 else ""
-
         await query.answer("⏳ جاري تجهيز الكشف...")
-        ok = attendance.write_teacher_roster(teacher_name, subject_label, roster_students)
-        if ok:
-            roster_url = f"https://docs.google.com/spreadsheets/d/{attendance.ROSTER_SHEET_ID}/edit"
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=f"📋 اتعمل كشف الحضور بطلاب {teacher_name} ({len(roster_students)} طالب) مرتبين أبجديًا:\n{roster_url}"
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="⚠️ حصل خطأ في تعبئة كشف الحضور. تأكدي إن صلاحيات الشيت مظبوطة."
-            )
+        await _att_make_roster_for_teacher(context, query.message.chat_id, teacher_name, results[teacher_name])
+
+    elif data == "att_roster_menu":
+        order = context.user_data.get("teacher_search_results_order", [])
+        if not order:
+            await query.answer("مفيش نتيجة بحث محفوظة، ابحثي تاني", show_alert=True)
+            return
+        keyboard = [
+            [InlineKeyboardButton(f"👨‍🏫 {t}", callback_data=f"att_roster_pick_{i}")]
+            for i, t in enumerate(order)
+        ]
+        keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")])
+        await query.edit_message_text(
+            "اختاري المدرس اللي عايزة تعملي كشف حضور بطلابه:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data.startswith("att_roster_pick_"):
+        idx = int(data.replace("att_roster_pick_", ""))
+        order = context.user_data.get("teacher_search_results_order", [])
+        results = context.user_data.get("teacher_search_results", {})
+        if idx >= len(order) or order[idx] not in results:
+            await query.answer("❌ حصل خطأ، ابحثي تاني", show_alert=True)
+            return
+        teacher_name = order[idx]
+        await query.edit_message_text(f"⏳ جاري تجهيز كشف {teacher_name}...")
+        await _att_make_roster_for_teacher(context, query.message.chat_id, teacher_name, results[teacher_name])
 
     elif data == "teacher_pdf":
         results = context.user_data.get("teacher_search_results", {})
@@ -1892,9 +1921,13 @@ async def handle_text(update: Update, context) -> None:
                 )
             response += "━━━━━━━━━━━━━━━━\n"
 
+        context.user_data["teacher_search_results_order"] = list(results.keys())
+
         kb_buttons = [[InlineKeyboardButton("📄 تحميل PDF بكل التفاصيل", callback_data="teacher_pdf")]]
         if len(results) == 1:
             kb_buttons.append([InlineKeyboardButton("📋 اعملي كشف حضور بالأسماء والأكواد", callback_data="att_make_roster")])
+        else:
+            kb_buttons.append([InlineKeyboardButton("📋 اعملي كشف حضور (اختاري المدرس)", callback_data="att_roster_menu")])
         kb_buttons.append([InlineKeyboardButton("🔍 بحث عن مدرس تاني", callback_data="search_teacher")])
         kb_buttons.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")])
         kb = InlineKeyboardMarkup(kb_buttons)
