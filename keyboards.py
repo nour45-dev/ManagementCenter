@@ -43,6 +43,18 @@ def attbulk_year_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 
+def att_roster_year_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("1️⃣ سنة أولى", callback_data="att_roster_year_ث1"),
+            InlineKeyboardButton("2️⃣ سنة تانية", callback_data="att_roster_year_ث2"),
+            InlineKeyboardButton("3️⃣ سنة تالتة", callback_data="att_roster_year_ث3"),
+        ],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 def attbulk_subjects_keyboard(subjects: list):
     keyboard = []
     for i in range(0, len(subjects), 2):
