@@ -234,29 +234,45 @@ def _get_roster_worksheet():
     return _roster_ws
 
 
-def write_teacher_roster(teacher_name: str, subject: str, students: list) -> bool:
+def write_teacher_roster(teacher_name: str, subject: str, students: list, year: str = None):
     """
     بتملى شيت 'كشف الحضور بالأسماء والأكواد' بقائمة طلاب مدرس معين مرتبة أبجديًا بالاسم.
-    students: list of dicts فيها 'اسم' و 'كود' على الأقل.
+    لو year اتحددت، بيتفلتر الطلاب على السنة دي بس.
+    students: list of dicts فيها 'اسم' و 'كود' و 'التخصص' و 'السنة' على الأقل.
+    بترجع (ok: bool, count: int) - عدد الطلاب اللي اتكتبوا فعليًا (بعد الفلترة).
     """
     try:
+        if year:
+            students = [s for s in students if str(s.get("السنة", "")).strip() == year]
+
         ws = _get_roster_worksheet()
 
-        max_rows = max(300, len(students) + 10)
-        ws.batch_clear([f"A4:M{max_rows + 3}"])
+        total_rows_needed = 3 + max(len(students), 1)  # 3 صفوف هيدر + صف بيانات على الأقل
+        try:
+            ws.resize(rows=total_rows_needed)
+        except Exception as e:
+            print(f"⚠️ مقدرتش أظبط عدد صفوف الشيت (هكمل عادي): {e}")
+
+        ws.batch_clear([f"A4:M{total_rows_needed}"])
 
         ws.update_cell(1, 2, subject or "")      # B1: قيمة اسم المادة
         ws.update_cell(1, 5, teacher_name or "")  # E1: قيمة اسم المدرس
+        ws.update_cell(3, 4, "عام / أزهر")        # D3: هيدر عمود التخصص
+
+        if not students:
+            return True, 0
 
         sorted_students = sorted(students, key=lambda s: str(s.get("اسم", "")))
-        rows = [[i, s.get("اسم", ""), str(s.get("كود", ""))] for i, s in enumerate(sorted_students, 1)]
-
-        if rows:
-            ws.update(range_name=f"A4:C{3 + len(rows)}", values=rows)
-        return True
+        rows = [
+            [i, s.get("اسم", ""), str(s.get("كود", "")), s.get("التخصص", "")]
+            for i, s in enumerate(sorted_students, 1)
+        ]
+        ws.update(range_name=f"A4:D{3 + len(rows)}", values=rows)
+        return True, len(rows)
     except Exception as e:
         print(f"❌ خطأ في كتابة كشف الحضور: {e}")
-        return False
+        return False, 0
+
 
 
 def build_report(year: str, row: int) -> dict:
