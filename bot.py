@@ -23,7 +23,8 @@ from keyboards import (
     confirm_delete_keyboard, back_keyboard, teachers_keyboard,
     attendance_menu_keyboard, att_subjects_keyboard, att_sessions_keyboard,
     att_present_absent_keyboard, att_exam_keyboard, att_done_keyboard,
-    attbulk_year_keyboard, attbulk_subjects_keyboard, attbulk_sessions_keyboard
+    attbulk_year_keyboard, attbulk_subjects_keyboard, attbulk_sessions_keyboard,
+    att_roster_year_keyboard
 )
 from pdf_report import generate_pdf
 from config import GEMINI_API_KEY
@@ -384,23 +385,36 @@ def _bulk_result_text(year, subject, session, success, fail) -> str:
     return text
 
 
-async def _att_make_roster_for_teacher(context, chat_id, teacher_name: str, data_val):
+async def _att_make_roster_for_teacher(context, chat_id, teacher_name: str, data_val, year: str):
     roster_students = data_val["طلاب"] if isinstance(data_val, dict) and "طلاب" in data_val else data_val
     subjects_used = {s.get("المادة", "") for s in roster_students if s.get("المادة")}
     subject_label = subjects_used.pop() if len(subjects_used) == 1 else ""
 
-    ok = attendance.write_teacher_roster(teacher_name, subject_label, roster_students)
-    if ok:
-        roster_url = f"https://docs.google.com/spreadsheets/d/{attendance.ROSTER_SHEET_ID}/edit"
+    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_main")]])
+
+    ok, count = attendance.write_teacher_roster(teacher_name, subject_label, roster_students, year=year)
+    if not ok:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"📋 اتعمل كشف الحضور بطلاب {teacher_name} ({len(roster_students)} طالب) مرتبين أبجديًا:\n{roster_url}"
+            text="⚠️ حصل خطأ في تعبئة كشف الحضور. تأكدي إن صلاحيات الشيت مظبوطة.",
+            reply_markup=back_kb
         )
-    else:
+        return
+
+    if count == 0:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="⚠️ حصل خطأ في تعبئة كشف الحضور. تأكدي إن صلاحيات الشيت مظبوطة."
+            text=f"📭 مفيش طلاب لـ {teacher_name} في {year}.",
+            reply_markup=back_kb
         )
+        return
+
+    roster_url = f"https://docs.google.com/spreadsheets/d/{attendance.ROSTER_SHEET_ID}/edit"
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"📋 اتعمل كشف الحضور بطلاب {teacher_name} ({year}) - {count} طالب مرتبين أبجديًا:\n{roster_url}",
+        reply_markup=back_kb
+    )
 
 
 # ====================================================
@@ -1504,8 +1518,11 @@ async def handle_callback(update: Update, context) -> None:
             await query.answer("مفيش نتيجة بحث عن مدرس واحد محفوظة، ابحثي تاني", show_alert=True)
             return
         teacher_name = list(results.keys())[0]
-        await query.answer("⏳ جاري تجهيز الكشف...")
-        await _att_make_roster_for_teacher(context, query.message.chat_id, teacher_name, results[teacher_name])
+        context.user_data["roster_pending_teacher"] = teacher_name
+        await query.edit_message_text(
+            f"👨‍🏫 {teacher_name}\n\nكشف طلاب أي سنة دراسية؟",
+            reply_markup=att_roster_year_keyboard()
+        )
 
     elif data == "att_roster_menu":
         order = context.user_data.get("teacher_search_results_order", [])
@@ -1530,8 +1547,21 @@ async def handle_callback(update: Update, context) -> None:
             await query.answer("❌ حصل خطأ، ابحثي تاني", show_alert=True)
             return
         teacher_name = order[idx]
-        await query.edit_message_text(f"⏳ جاري تجهيز كشف {teacher_name}...")
-        await _att_make_roster_for_teacher(context, query.message.chat_id, teacher_name, results[teacher_name])
+        context.user_data["roster_pending_teacher"] = teacher_name
+        await query.edit_message_text(
+            f"👨‍🏫 {teacher_name}\n\nكشف طلاب أي سنة دراسية؟",
+            reply_markup=att_roster_year_keyboard()
+        )
+
+    elif data.startswith("att_roster_year_"):
+        year = data.replace("att_roster_year_", "")
+        teacher_name = context.user_data.get("roster_pending_teacher")
+        results = context.user_data.get("teacher_search_results", {})
+        if not teacher_name or teacher_name not in results:
+            await query.answer("❌ حصل خطأ، ابحثي تاني", show_alert=True)
+            return
+        await query.edit_message_text(f"⏳ جاري تجهيز كشف {teacher_name} - {year}...")
+        await _att_make_roster_for_teacher(context, query.message.chat_id, teacher_name, results[teacher_name], year)
 
     elif data == "teacher_pdf":
         results = context.user_data.get("teacher_search_results", {})
