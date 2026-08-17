@@ -1,3 +1,4 @@
+import re
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -7,6 +8,27 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
+
+
+def normalize_arabic(text: str) -> str:
+    """
+    بتوحد صيغ الاسم العربي المختلفة عشان البحث يبقى ذكي:
+    - بتشيل التشكيل
+    - بتوحد الألف (أ إ آ ٱ) لـ ا
+    - بتوحد الألف المقصورة (ى) والياء (ي)
+    - بتوحد التاء المربوطة (ة) والهاء (ه)
+    - بتشيل المسافات كلها (عشان "عبدالله" و"عبد الله" يتطابقوا)
+    """
+    if not text:
+        return ""
+    text = str(text).strip()
+    text = re.sub(r'[\u064B-\u065F\u0670]', '', text)   # تشكيل
+    text = re.sub(r'[إأآٱ]', 'ا', text)                  # الألف بأنواعها
+    text = text.replace('ى', 'ي')                        # ألف مقصورة
+    text = text.replace('ة', 'ه')                         # تاء مربوطة
+    text = text.replace('ـ', '')                          # تطويل
+    text = re.sub(r'\s+', '', text)                       # كل المسافات
+    return text.lower()
 
 
 def connect_to_sheet():
@@ -158,8 +180,8 @@ def search_by_name(name: str) -> list:
     try:
         sheet = connect_to_sheet()
         all_data = sheet.get_all_records()
-        name_lower = name.strip().lower()
-        return [s for s in all_data if name_lower in str(s.get("الاسم", "")).lower()]
+        name_norm = normalize_arabic(name)
+        return [s for s in all_data if name_norm in normalize_arabic(s.get("الاسم", ""))]
     except Exception as e:
         print(f"❌ خطأ في البحث بالاسم: {e}")
         return []
@@ -269,10 +291,10 @@ def get_teacher_stats(teacher_name: str = None) -> dict | list:
                 })
 
         if teacher_name:
-            teacher_name_lower = teacher_name.strip().lower()
+            teacher_name_norm = normalize_arabic(teacher_name)
             results = {}
             for t, students in teachers.items():
-                if teacher_name_lower in t.lower():
+                if teacher_name_norm in normalize_arabic(t):
                     by_year = {"ث1": 0, "ث2": 0, "ث3": 0}
                     by_spec = {"عام": 0, "أزهر": 0, "بكالوريا": 0}
                     for s in students:
