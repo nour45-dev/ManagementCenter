@@ -1834,6 +1834,7 @@ async def handle_text(update: Update, context) -> None:
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ كملي التسجيل بنفس الاسم", callback_data="regname_continue")],
                     [InlineKeyboardButton("✍️ هكتب اسم تاني", callback_data="regname_retry")],
+                    [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="back_main")],
                 ])
             )
             return
