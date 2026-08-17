@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 # مراحل المحادثة
 # ====================================================
 GET_NAME           = "GET_NAME"
+GET_NAME_CONFIRM   = "GET_NAME_CONFIRM"    # تأكيد الاستمرار لو الاسم مسجل قبل كدا
 GET_CODE           = "GET_CODE"
 GET_AREA           = "GET_AREA"
 GET_PHONE          = "GET_PHONE"
@@ -561,6 +562,15 @@ async def handle_callback(update: Update, context) -> None:
             "📚 القائمة الرئيسية\n\nإيه اللي عايزاه تعمليه؟",
             reply_markup=main_menu_keyboard()
         )
+
+    # ====== تأكيد اسم مكرر أثناء التسجيل ======
+    elif data == "regname_continue":
+        user_state[uid] = GET_CODE
+        await query.edit_message_text("✅ تمام، هنكمل بنفس الاسم\n\n2️⃣ اكتبي كود الطالب:", reply_markup=back_keyboard())
+
+    elif data == "regname_retry":
+        user_state[uid] = GET_NAME
+        await query.edit_message_text("✍️ اكتبي اسم الطالب تاني:", reply_markup=back_keyboard())
 
     # ====== آخر كود لكل سنة ======
     elif data == "last_codes":
@@ -1810,8 +1820,28 @@ async def handle_text(update: Update, context) -> None:
     # ====== خطوات التسجيل ======
     if state == GET_NAME:
         temp_data[uid]["اسم"] = text
+        matches = search_by_name(text)
+        if matches:
+            msg = f"⚠️ فيه طالب/طلاب متسجلين قبل كدا بنفس الاسم أو قريب منه:\n\n"
+            for m in matches[:5]:
+                msg += format_student_info(m) + "\n\n"
+            if len(matches) > 5:
+                msg += f"... و{len(matches) - 5} طالب تاني بنفس الاسم\n\n"
+            msg += "عايزة تكملي التسجيل بنفس الاسم، ولا تكتبي اسم تاني؟"
+            user_state[uid] = GET_NAME_CONFIRM
+            await update.message.reply_text(
+                msg,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ كملي التسجيل بنفس الاسم", callback_data="regname_continue")],
+                    [InlineKeyboardButton("✍️ هكتب اسم تاني", callback_data="regname_retry")],
+                ])
+            )
+            return
         user_state[uid] = GET_CODE
         await update.message.reply_text(f"✅ الاسم: {text}\n\n2️⃣ اكتبي كود الطالب:", reply_markup=back_keyboard())
+
+    elif state == GET_NAME_CONFIRM:
+        await update.message.reply_text("اضغطي على أحد الزرارين فوق 👆")
 
     elif state == GET_CODE:
         existing = search_by_code(text)
