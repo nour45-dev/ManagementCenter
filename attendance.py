@@ -13,6 +13,7 @@ import os
 import json
 import gspread
 from google.oauth2.service_account import Credentials
+from sheets import normalize_arabic
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -124,10 +125,10 @@ def find_rows_by_name(year: str, name: str):
     try:
         ws = _get_worksheet(year)
         names = ws.col_values(1)
-        name_lower = name.strip().lower()
+        name_norm = normalize_arabic(name)
         matches = []
         for i, n in enumerate(names, 1):
-            if name_lower and name_lower in str(n).strip().lower():
+            if name_norm and name_norm in normalize_arabic(n):
                 matches.append((i, str(n).strip()))
         return matches
     except Exception as e:
